@@ -131,7 +131,17 @@ builder.Services.AddCors(options =>
                 .Get<string[]>() ?? Array.Empty<string>();
 
             policy
-                .WithOrigins(allowedOrigins)
+                .SetIsOriginAllowed(origin =>
+                {
+                    if (string.IsNullOrWhiteSpace(origin)) return false;
+                    if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return false;
+
+                    if (allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase))
+                        return true;
+
+                    return uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                        || uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase);
+                })
                 .AllowAnyHeader()
                 .AllowAnyMethod();
         }
