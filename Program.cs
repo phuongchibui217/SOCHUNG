@@ -17,10 +17,23 @@ var config = builder.Configuration;
 var env = builder.Environment;
 
 // ── Database ──────────────────────────────────────────────────────────────────
+var connectionString = config.GetConnectionString("DefaultConnection");
+if (string.IsNullOrWhiteSpace(connectionString))
+    throw new InvalidOperationException("DefaultConnection is not configured.");
+
+// Log để xác nhận đã load được connection string (ẩn password)
+var connForLog = System.Text.RegularExpressions.Regex.Replace(
+    connectionString, @"Password=[^;]*", "Password=***");
+Console.WriteLine($"[Startup] DefaultConnection loaded: {connForLog}");
+
 builder.Services.AddDbContext<SoChungDbContext>(options =>
     options.UseNpgsql(
-        config.GetConnectionString("DefaultConnection"),
-        npgsql => npgsql.EnableRetryOnFailure(3)
+        connectionString,
+        npgsql =>
+        {
+            npgsql.EnableRetryOnFailure(3);
+            npgsql.CommandTimeout(60);
+        }
     ));
 
 // ── Application Services ──────────────────────────────────────────────────────
