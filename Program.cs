@@ -149,5 +149,6 @@ app.UseAuthorization();
 
 app.MapControllers();
 app.MapGet("/", () => "SOCHUNG API is running!");
+app.MapGet("/health", () => Results.Ok(new { status = "ok", timestamp = DateTime.UtcNow }));
 
 app.Run();
