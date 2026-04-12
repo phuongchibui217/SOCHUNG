@@ -9,8 +9,13 @@ public class CategoryService : ICategoryService
 {
     private const string DefaultCategoryName = "Khác";
     private readonly SoChungDbContext _db;
+    private readonly ILogger<CategoryService> _logger;
 
-    public CategoryService(SoChungDbContext db) => _db = db;
+    public CategoryService(SoChungDbContext db, ILogger<CategoryService> logger)
+    {
+        _db = db;
+        _logger = logger;
+    }
 
     public async Task<DanhMucChiTieu?> GetValidCategoryAsync(long categoryId, long userId)
     {
@@ -63,35 +68,86 @@ public class CategoryService : ICategoryService
         // Đảm bảo "Khác" luôn tồn tại trước khi query
         await GetOrCreateDefaultCategoryAsync(userId);
 
-        // Lấy danh sách IdDanhMucGoc mà user đã override DaXoa = true (ẩn category chung)
+        // Lấy tất cả category hệ thống chưa xóa
+        var systemCategories = await _db.DanhMucChiTieus
+            .Where(d => d.IdNguoiDung == null && !d.DaXoa)
+            .ToListAsync();
+
+        // Lấy tất cả category của user (bao gồm cả override) chưa xóa
+        var userCategories = await _db.DanhMucChiTieus
+            .Where(d => d.IdNguoiDung == userId && !d.DaXoa)
+            .ToListAsync();
+
+        // Lấy override bị ẩn (DaXoa = true) để biết system category nào cần ẩn
         var hiddenSystemIds = await _db.DanhMucChiTieus
             .Where(d => d.IdNguoiDung == userId && d.IdDanhMucGoc != null && d.DaXoa)
             .Select(d => d.IdDanhMucGoc!.Value)
             .ToListAsync();
 
-        // Lấy danh mục của user (không phải override ẩn) + danh mục chung chưa bị user ẩn
-        var result = await _db.DanhMucChiTieus
-            .Where(d =>
-                !d.DaXoa &&
-                d.IdDanhMucGoc == null &&   // bỏ qua các record override
-                (
-                    d.IdNguoiDung == userId ||
-                    (d.IdNguoiDung == null && !hiddenSystemIds.Contains(d.IdDanhMuc))
-                ))
-            .Select(d => new CategoryPickerDto
+        _logger.LogInformation(
+            "GetCategories userId={UserId} systemCount={SystemCount} userCount={UserCount} hiddenCount={HiddenCount}",
+            userId, systemCategories.Count, userCategories.Count, hiddenSystemIds.Count);
+
+        var result = new List<CategoryPickerDto>();
+
+        // Merge: với mỗi system category, ưu tiên override của user nếu có
+        foreach (var sys in systemCategories)
+        {
+            // Bỏ qua nếu user đã ẩn (override DaXoa=true)
+            if (hiddenSystemIds.Contains(sys.IdDanhMuc))
+                continue;
+
+            var overrideItem = userCategories
+                .FirstOrDefault(u => u.IdDanhMucGoc == sys.IdDanhMuc);
+
+            if (overrideItem != null)
             {
-                IdDanhMuc = d.IdDanhMuc,
-                TenDanhMuc = d.TenDanhMuc,
-                Icon = d.Icon,
-                MauSac = d.MauSac,
-                TransactionCount = d.ChiTieus
-                    .Count(c => c.IdNguoiDung == userId && !c.DaXoa)
-            })
+                _logger.LogInformation(
+                    "GetCategories system={SystemId} overridden by {OverrideId} name='{Name}'",
+                    sys.IdDanhMuc, overrideItem.IdDanhMuc, overrideItem.TenDanhMuc);
+
+                result.Add(new CategoryPickerDto
+                {
+                    IdDanhMuc        = overrideItem.IdDanhMuc,
+                    TenDanhMuc       = overrideItem.TenDanhMuc,
+                    Icon             = overrideItem.Icon,
+                    MauSac           = overrideItem.MauSac,
+                    TransactionCount = await _db.ChiTieus
+                        .CountAsync(c => c.IdDanhMuc == overrideItem.IdDanhMuc && c.IdNguoiDung == userId && !c.DaXoa)
+                });
+            }
+            else
+            {
+                result.Add(new CategoryPickerDto
+                {
+                    IdDanhMuc        = sys.IdDanhMuc,
+                    TenDanhMuc       = sys.TenDanhMuc,
+                    Icon             = sys.Icon,
+                    MauSac           = sys.MauSac,
+                    TransactionCount = await _db.ChiTieus
+                        .CountAsync(c => c.IdDanhMuc == sys.IdDanhMuc && c.IdNguoiDung == userId && !c.DaXoa)
+                });
+            }
+        }
+
+        // Thêm category riêng của user (không phải override hệ thống)
+        foreach (var u in userCategories.Where(u => u.IdDanhMucGoc == null))
+        {
+            result.Add(new CategoryPickerDto
+            {
+                IdDanhMuc        = u.IdDanhMuc,
+                TenDanhMuc       = u.TenDanhMuc,
+                Icon             = u.Icon,
+                MauSac           = u.MauSac,
+                TransactionCount = await _db.ChiTieus
+                    .CountAsync(c => c.IdDanhMuc == u.IdDanhMuc && c.IdNguoiDung == userId && !c.DaXoa)
+            });
+        }
+
+        return result
             .OrderBy(d => d.TenDanhMuc == DefaultCategoryName ? 1 : 0)
             .ThenBy(d => d.TenDanhMuc)
-            .ToListAsync();
-
-        return result;
+            .ToList();
     }
 
     public async Task<(DanhMucChiTieu? Entity, string? Error)> CreateCategoryAsync(
