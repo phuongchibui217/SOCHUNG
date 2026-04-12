@@ -23,7 +23,7 @@ builder.Services.AddDbContext<SoChungDbContext>(options =>
         npgsql => npgsql.EnableRetryOnFailure(3)
     ));
 
-// ── Application Services ──────────────────────────────────────────────────────
+// ── Application Services ─────────────────────────────────app.UseHttpsRedirection();─────────────────────
 builder.Services.AddMemoryCache();
 builder.Services.AddScoped<ExpenseManagerAPI.Services.ICategoryService, ExpenseManagerAPI.Services.CategoryService>();
 builder.Services.AddScoped<ExpenseManagerAPI.Services.IDashboardService, ExpenseManagerAPI.Services.DashboardService>();
@@ -142,7 +142,7 @@ if (env.IsDevelopment())
 
 app.UseCors("AllowAll");
 
-app.UseHttpsRedirection();
+// app.UseHttpsRedirection();
 
 app.UseAuthentication();
 app.UseAuthorization();
