@@ -23,6 +23,11 @@ public interface IDashboardService
     Task<decimal> GetTotalDebtAsync(long userId, DateTime from, DateTime to);
 
     /// <summary>
+    /// Tính tổng công nợ theo loại (NO hoặc CHO_VAY) trong khoảng [from, to].
+    /// </summary>
+    Task<decimal> GetTotalDebtByTypeAsync(long userId, DateTime from, DateTime to, string loaiCongNo);
+
+    /// <summary>
     /// Lấy top 3 danh mục chi tiêu nhiều nhất trong khoảng [from, to].
     /// </summary>
     Task<List<TopCategoryDto>> GetTopCategoriesAsync(long userId, DateTime from, DateTime to);

@@ -36,20 +36,22 @@ public class ExpensesController : ControllerBase
         var userId = GetCurrentUserId();
 
         var list = await _db.ChiTieus
-            .Include(c => c.DanhMucChiTieu)
             .Where(c => c.IdNguoiDung == userId && !c.DaXoa)
             .OrderByDescending(c => c.NgayChi)
             .Select(c => new ChiTieuResponseDto
             {
-                IdChiTieu = c.IdChiTieu,
+                IdChiTieu   = c.IdChiTieu,
                 IdNguoiDung = c.IdNguoiDung,
-                IdDanhMuc = c.IdDanhMuc,
-                TenDanhMuc = c.DanhMucChiTieu!.TenDanhMuc,
-                Icon = c.DanhMucChiTieu.Icon,
-                MauSac = c.DanhMucChiTieu.MauSac,
-                SoTien = c.SoTien,
-                NoiDung = c.NoiDung,
-                NgayChi = c.NgayChi
+                IdDanhMuc   = c.IdDanhMuc,
+                TenDanhMuc  = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
+                                  ? c.DanhMucChiTieu.TenDanhMuc : "Khác",
+                Icon        = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
+                                  ? c.DanhMucChiTieu.Icon : "more_horiz",
+                MauSac      = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
+                                  ? c.DanhMucChiTieu.MauSac : "#9E9E9E",
+                SoTien      = c.SoTien,
+                NoiDung     = c.NoiDung,
+                NgayChi     = c.NgayChi
             })
             .ToListAsync();
 
@@ -57,12 +59,16 @@ public class ExpensesController : ControllerBase
     }
 
     // GET /api/expenses/history — lịch sử chi tiêu có filter + paging
+    // Hỗ trợ 2 cách filter thời gian:
+    //   Cách 1: fromDate + toDate (truyền thẳng range)
+    //   Cách 2: mode + date (BE tự tính range)
+    //     mode=day   → đúng ngày date
+    //     mode=week  → thứ Hai đến Chủ Nhật của tuần chứa date
+    //     mode=month → ngày 1 đến cuối tháng chứa date
     [HttpGet("history")]
     public async Task<IActionResult> GetHistory([FromQuery] ExpenseHistoryQuery query)
     {
         var userId = GetCurrentUserId();
-
-        // Fallback tên danh mục khi category bị null hoặc đã xóa
         const string fallbackCategoryName = "Khác";
 
         var q = _db.ChiTieus
@@ -76,13 +82,39 @@ public class ExpensesController : ControllerBase
             q = q.Where(c => c.NoiDung != null && c.NoiDung.Contains(kw));
         }
 
-        // Filter fromDate
-        if (query.FromDate.HasValue)
-            q = q.Where(c => c.NgayChi >= query.FromDate.Value.Date);
+        // Tính fromDate/toDate từ mode+date nếu có, ưu tiên hơn fromDate/toDate trực tiếp
+        DateTime? fromDate = query.FromDate;
+        DateTime? toDate   = query.ToDate;
 
-        // Filter toDate
-        if (query.ToDate.HasValue)
-            q = q.Where(c => c.NgayChi <= query.ToDate.Value.Date);
+        if (!string.IsNullOrEmpty(query.Mode) && query.Date.HasValue)
+        {
+            var anchor = query.Date.Value.Date;
+            switch (query.Mode.ToLower())
+            {
+                case "day":
+                    fromDate = anchor;
+                    toDate   = anchor;
+                    break;
+                case "week":
+                    // Tuần bắt đầu từ thứ Hai (ISO week)
+                    var dow      = (int)anchor.DayOfWeek; // 0=Sun,1=Mon,...,6=Sat
+                    var daysToMon = dow == 0 ? 6 : dow - 1;
+                    fromDate = anchor.AddDays(-daysToMon);
+                    toDate   = fromDate.Value.AddDays(6);
+                    break;
+                case "month":
+                    fromDate = new DateTime(anchor.Year, anchor.Month, 1);
+                    toDate   = fromDate.Value.AddMonths(1).AddDays(-1);
+                    break;
+            }
+            Console.WriteLine($"[History] mode={query.Mode} anchor={anchor:yyyy-MM-dd} from={fromDate:yyyy-MM-dd} to={toDate:yyyy-MM-dd}");
+        }
+
+        if (fromDate.HasValue)
+            q = q.Where(c => c.NgayChi >= fromDate.Value.Date);
+
+        if (toDate.HasValue)
+            q = q.Where(c => c.NgayChi <= toDate.Value.Date);
 
         // Filter theo danh mục
         if (query.CategoryId.HasValue)
@@ -105,30 +137,36 @@ public class ExpensesController : ControllerBase
         else
         {
             var pageSize = Math.Clamp(query.PageSize, 1, 100);
-            var page = Math.Max(query.Page, 1);
+            var page     = Math.Max(query.Page, 1);
             paged = q.Skip((page - 1) * pageSize).Take(pageSize);
         }
 
-        // Project — LEFT JOIN với DanhMucChiTieu, fallback nếu category null/đã xóa
-        var data = await paged
-            .Select(c => new ExpenseHistoryDto
+        // Project — TransactionDate trả string yyyy-MM-dd, không có time component
+        var raw = await paged
+            .Select(c => new
             {
-                ExpenseId = c.IdChiTieu,
-                Note = c.NoiDung,
-                Amount = c.SoTien,
-                TransactionDate = c.NgayChi,
-                CategoryId = c.IdDanhMuc,
-                CategoryName = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
-                    ? c.DanhMucChiTieu.TenDanhMuc
-                    : fallbackCategoryName,
-                CategoryIcon = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
-                    ? c.DanhMucChiTieu.Icon
-                    : "more_horiz",
-                CategoryColor = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
-                    ? c.DanhMucChiTieu.MauSac
-                    : "#9E9E9E"
+                c.IdChiTieu,
+                c.NoiDung,
+                c.SoTien,
+                c.NgayChi,
+                c.IdDanhMuc,
+                CatName  = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa ? c.DanhMucChiTieu.TenDanhMuc : fallbackCategoryName,
+                CatIcon  = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa ? c.DanhMucChiTieu.Icon : "more_horiz",
+                CatColor = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa ? c.DanhMucChiTieu.MauSac : "#9E9E9E"
             })
             .ToListAsync();
+
+        var data = raw.Select(c => new ExpenseHistoryDto
+        {
+            ExpenseId       = c.IdChiTieu,
+            Note            = c.NoiDung,
+            Amount          = c.SoTien,
+            TransactionDate = c.NgayChi.ToString("yyyy-MM-dd"),
+            CategoryId      = c.IdDanhMuc,
+            CategoryName    = c.CatName ?? fallbackCategoryName,
+            CategoryIcon    = c.CatIcon,
+            CategoryColor   = c.CatColor
+        }).ToList();
 
         // Response
         if (query.Limit.HasValue)
@@ -140,8 +178,8 @@ public class ExpensesController : ControllerBase
             data,
             pagination = new
             {
-                page = query.Page,
-                pageSize = Math.Clamp(query.PageSize, 1, 100),
+                page      = query.Page,
+                pageSize  = Math.Clamp(query.PageSize, 1, 100),
                 totalCount,
                 totalPages = (int)Math.Ceiling((double)totalCount! / Math.Clamp(query.PageSize, 1, 100))
             }
@@ -150,90 +188,141 @@ public class ExpensesController : ControllerBase
 
     // -------------------------------------------------------------------------
     // GET /api/expenses/search
-    // Tìm kiếm khoản chi theo keyword, có phân trang.
+    // Tìm kiếm realtime theo keyword, có phân trang (max 15/page).
     //
-    // Accent-insensitive strategy:
-    //   SQL Server collation Latin1_General_CI_AI (CI = case-insensitive,
-    //   AI = accent-insensitive) được áp dụng qua EF.Functions.Collate().
-    //   Điều này cho phép "ca phe" match "cà phê" trực tiếp ở DB layer
-    //   mà không cần normalize chuỗi ở app layer, giữ hiệu năng tốt.
+    // Accent-insensitive + case-insensitive strategy (PostgreSQL):
+    //   Dùng unaccent() extension (có sẵn trên Supabase) kết hợp ILIKE.
+    //   unaccent("nhà") = "nha" → "nha" ILIKE "%nha%" sẽ match.
+    //   Áp dụng cả cho keyword lẫn column để đảm bảo 2 chiều.
     //
-    // Phạm vi tìm kiếm: NoiDung, TenDanhMuc, SoTien (dạng text)
+    // Phạm vi tìm kiếm: NoiDung (title), TenDanhMuc (category), SoTien (amount)
+    // Keyword rỗng → trả toàn bộ (FE xử lý recent transactions)
     // -------------------------------------------------------------------------
     [HttpGet("search")]
     public async Task<IActionResult> Search([FromQuery] ExpenseSearchQuery query)
     {
-        if (!ModelState.IsValid)
-        {
-            var errors = ModelState
-                .Where(x => x.Value?.Errors.Count > 0)
-                .ToDictionary(
-                    k => char.ToLower(k.Key[0]) + k.Key[1..],
-                    v => v.Value!.Errors.Select(e => e.ErrorMessage).ToArray()
-                );
-            return BadRequest(new { message = "Dữ liệu không hợp lệ", errors });
-        }
-
         var userId = GetCurrentUserId();
 
         // Trim trái, giữ khoảng trắng giữa các từ
-        var keyword = query.Keyword.TrimStart();
-        if (keyword.Length == 0)
-            return BadRequest(new { message = "Dữ liệu không hợp lệ",
-                errors = new { keyword = new[] { "Keyword không được rỗng" } } });
+        var keyword = (query.Keyword ?? string.Empty).TrimStart();
+
+        Console.WriteLine($"[ExpenseSearch] userId={userId} keyword='{keyword}' page={query.Page} pageSize={query.PageSize}");
 
         const string fallbackCategoryName = "Khác";
+
+        var pageSize = Math.Clamp(query.PageSize, 1, 15);
+        var page     = Math.Max(query.Page, 1);
 
         var q = _db.ChiTieus
             .Where(c => c.IdNguoiDung == userId && !c.DaXoa)
             .AsQueryable();
 
-        q = q.Where(c =>
-            (c.NoiDung != null && EF.Functions.ILike(c.NoiDung, "%" + keyword + "%"))
-            ||
-            (c.DanhMucChiTieu != null && EF.Functions.ILike(c.DanhMucChiTieu.TenDanhMuc, "%" + keyword + "%"))
-            ||
-            EF.Functions.ILike(c.SoTien.ToString(), "%" + keyword + "%")
-        );
+        var totalBefore = await q.CountAsync();
+        Console.WriteLine($"[ExpenseSearch] totalBefore filter={totalBefore}");
 
-        q = q.OrderByDescending(c => c.NgayChi).ThenByDescending(c => c.IdChiTieu);
+        int totalItems;
+        List<ExpenseSearchItemDto> items;
 
-        var pageSize = Math.Clamp(query.PageSize, 1, 15);
-        var page = Math.Max(query.Page, 1);
+        if (!string.IsNullOrEmpty(keyword))
+        {
+            var pattern = "%" + keyword + "%";
 
-        var totalItems = await q.CountAsync();
-        var totalPages = (int)Math.Ceiling((double)totalItems / pageSize);
-
-        var items = await q
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .Select(c => new ExpenseSearchItemDto
+            // Thử unaccent() trước — accent-insensitive + case-insensitive
+            // Fallback sang ILike thường nếu extension chưa enable (không crash 500)
+            IQueryable<ChiTieu> filtered;
+            try
             {
-                ExpenseId = c.IdChiTieu,
-                Note = c.NoiDung,
-                Amount = c.SoTien,
-                TransactionDate = c.NgayChi,
-                CategoryId = c.IdDanhMuc,
-                CategoryName = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
-                    ? c.DanhMucChiTieu.TenDanhMuc
-                    : fallbackCategoryName,
-                CategoryIcon = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
-                    ? c.DanhMucChiTieu.Icon
-                    : "more_horiz",
-                CategoryColor = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
-                    ? c.DanhMucChiTieu.MauSac
-                    : "#9E9E9E"
-            })
-            .ToListAsync();
+                filtered = q.Where(c =>
+                    (c.NoiDung != null &&
+                        EF.Functions.ILike(AppDb.Unaccent(c.NoiDung), AppDb.Unaccent(pattern)))
+                    ||
+                    (c.DanhMucChiTieu != null &&
+                        EF.Functions.ILike(AppDb.Unaccent(c.DanhMucChiTieu.TenDanhMuc), AppDb.Unaccent(pattern)))
+                    ||
+                    EF.Functions.ILike(c.SoTien.ToString(), pattern)
+                );
+                // Probe COUNT để phát hiện lỗi unaccent trước khi fetch data
+                totalItems = await filtered.CountAsync();
+                Console.WriteLine($"[ExpenseSearch] mode=unaccent totalAfter={totalItems}");
+            }
+            catch (Exception ex) when (
+                ex.Message.Contains("unaccent") ||
+                ex.InnerException?.Message.Contains("unaccent") == true)
+            {
+                Console.WriteLine($"[ExpenseSearch] unaccent unavailable, fallback ILike: {ex.Message}");
+                filtered = q.Where(c =>
+                    (c.NoiDung != null && EF.Functions.ILike(c.NoiDung, pattern))
+                    ||
+                    (c.DanhMucChiTieu != null && EF.Functions.ILike(c.DanhMucChiTieu.TenDanhMuc, pattern))
+                    ||
+                    EF.Functions.ILike(c.SoTien.ToString(), pattern)
+                );
+                totalItems = await filtered.CountAsync();
+                Console.WriteLine($"[ExpenseSearch] mode=ilike totalAfter={totalItems}");
+            }
+
+            items = await filtered
+                .OrderByDescending(c => c.NgayChi).ThenByDescending(c => c.IdChiTieu)
+                .Skip((page - 1) * pageSize).Take(pageSize)
+                .Select(c => new
+                {
+                    c.IdChiTieu, c.NoiDung, c.SoTien, c.NgayChi, c.IdDanhMuc,
+                    CatName  = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa ? c.DanhMucChiTieu.TenDanhMuc : fallbackCategoryName,
+                    CatIcon  = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa ? c.DanhMucChiTieu.Icon : "more_horiz",
+                    CatColor = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa ? c.DanhMucChiTieu.MauSac : "#9E9E9E"
+                })
+                .ToListAsync()
+                .ContinueWith(t => t.Result.Select(c => new ExpenseSearchItemDto
+                {
+                    ExpenseId       = c.IdChiTieu,
+                    Note            = c.NoiDung,
+                    Amount          = c.SoTien,
+                    TransactionDate = c.NgayChi.ToString("yyyy-MM-dd"),
+                    CategoryId      = c.IdDanhMuc,
+                    CategoryName    = c.CatName ?? fallbackCategoryName,
+                    CategoryIcon    = c.CatIcon,
+                    CategoryColor   = c.CatColor
+                }).ToList());
+        }
+        else
+        {
+            // Keyword rỗng → trả toàn bộ, không filter
+            var sorted = q.OrderByDescending(c => c.NgayChi).ThenByDescending(c => c.IdChiTieu);
+            totalItems = await sorted.CountAsync();
+            items = await sorted
+                .Skip((page - 1) * pageSize).Take(pageSize)
+                .Select(c => new
+                {
+                    c.IdChiTieu, c.NoiDung, c.SoTien, c.NgayChi, c.IdDanhMuc,
+                    CatName  = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa ? c.DanhMucChiTieu.TenDanhMuc : fallbackCategoryName,
+                    CatIcon  = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa ? c.DanhMucChiTieu.Icon : "more_horiz",
+                    CatColor = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa ? c.DanhMucChiTieu.MauSac : "#9E9E9E"
+                })
+                .ToListAsync()
+                .ContinueWith(t => t.Result.Select(c => new ExpenseSearchItemDto
+                {
+                    ExpenseId       = c.IdChiTieu,
+                    Note            = c.NoiDung,
+                    Amount          = c.SoTien,
+                    TransactionDate = c.NgayChi.ToString("yyyy-MM-dd"),
+                    CategoryId      = c.IdDanhMuc,
+                    CategoryName    = c.CatName ?? fallbackCategoryName,
+                    CategoryIcon    = c.CatIcon,
+                    CategoryColor   = c.CatColor
+                }).ToList());
+        }
+
+        var totalPages = (int)Math.Ceiling((double)totalItems / pageSize);
+        Console.WriteLine($"[ExpenseSearch] returned={items.Count} totalPages={totalPages}");
 
         return Ok(new
         {
             message = "Tìm kiếm thành công",
             data = new ExpenseSearchResultDto
             {
-                Items = items,
-                Page = page,
-                PageSize = pageSize,
+                Items      = items,
+                Page       = page,
+                PageSize   = pageSize,
                 TotalItems = totalItems,
                 TotalPages = totalPages
             }
@@ -243,39 +332,70 @@ public class ExpensesController : ControllerBase
     // -------------------------------------------------------------------------
     // GET /api/expenses/search/suggestions
     // Gợi ý nhanh top 5 khi user nhập keyword.
-    // Cùng collation CI_AI, tìm trong NoiDung và TenDanhMuc.
+    // Accent-insensitive qua unaccent(), case-insensitive qua ILIKE.
+    // Keyword rỗng → trả [] ngay, không query DB.
     // -------------------------------------------------------------------------
     [HttpGet("search/suggestions")]
     public async Task<IActionResult> SearchSuggestions([FromQuery] string? keyword)
     {
-        if (string.IsNullOrWhiteSpace(keyword) || keyword.TrimStart().Length < 1)
+        var kw = keyword?.TrimStart() ?? string.Empty;
+
+        if (kw.Length == 0)
             return Ok(new { message = "Lấy gợi ý thành công", data = Array.Empty<object>() });
 
         var userId = GetCurrentUserId();
-        var kw = keyword.TrimStart();
+        Console.WriteLine($"[ExpenseSuggestions] userId={userId} keyword='{kw}'");
 
         const string fallbackCategoryName = "Khác";
 
-        var suggestions = await _db.ChiTieus
-            .Where(c => c.IdNguoiDung == userId && !c.DaXoa &&
-                (
-                    (c.NoiDung != null && EF.Functions.ILike(c.NoiDung, "%" + kw + "%"))
-                    ||
-                    (c.DanhMucChiTieu != null && EF.Functions.ILike(c.DanhMucChiTieu.TenDanhMuc, "%" + kw + "%"))
-                ))
-            .OrderByDescending(c => c.NgayChi)
-            .Take(5)
-            .Select(c => new ExpenseSuggestionDto
-            {
-                ExpenseId = c.IdChiTieu,
-                Note = c.NoiDung,
-                Amount = c.SoTien,
-                CategoryName = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
-                    ? c.DanhMucChiTieu.TenDanhMuc
-                    : fallbackCategoryName
-            })
-            .ToListAsync();
+        List<ExpenseSuggestionDto> suggestions;
+        try
+        {
+            suggestions = await _db.ChiTieus
+                .Where(c => c.IdNguoiDung == userId && !c.DaXoa &&
+                    (
+                        (c.NoiDung != null &&
+                            EF.Functions.ILike(AppDb.Unaccent(c.NoiDung), AppDb.Unaccent("%" + kw + "%")))
+                        ||
+                        (c.DanhMucChiTieu != null &&
+                            EF.Functions.ILike(AppDb.Unaccent(c.DanhMucChiTieu.TenDanhMuc), AppDb.Unaccent("%" + kw + "%")))
+                    ))
+                .OrderByDescending(c => c.NgayChi)
+                .Take(5)
+                .Select(c => new ExpenseSuggestionDto
+                {
+                    ExpenseId    = c.IdChiTieu,
+                    Note         = c.NoiDung,
+                    Amount       = c.SoTien,
+                    CategoryName = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
+                        ? c.DanhMucChiTieu.TenDanhMuc : fallbackCategoryName
+                })
+                .ToListAsync();
+        }
+        catch
+        {
+            // Fallback nếu unaccent không khả dụng
+            suggestions = await _db.ChiTieus
+                .Where(c => c.IdNguoiDung == userId && !c.DaXoa &&
+                    (
+                        (c.NoiDung != null && EF.Functions.ILike(c.NoiDung, "%" + kw + "%"))
+                        ||
+                        (c.DanhMucChiTieu != null && EF.Functions.ILike(c.DanhMucChiTieu.TenDanhMuc, "%" + kw + "%"))
+                    ))
+                .OrderByDescending(c => c.NgayChi)
+                .Take(5)
+                .Select(c => new ExpenseSuggestionDto
+                {
+                    ExpenseId    = c.IdChiTieu,
+                    Note         = c.NoiDung,
+                    Amount       = c.SoTien,
+                    CategoryName = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
+                        ? c.DanhMucChiTieu.TenDanhMuc : fallbackCategoryName
+                })
+                .ToListAsync();
+        }
 
+        Console.WriteLine($"[ExpenseSuggestions] found={suggestions.Count}");
         return Ok(new { message = "Lấy gợi ý thành công", data = suggestions });
     }
 

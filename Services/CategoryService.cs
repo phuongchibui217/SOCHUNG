@@ -63,10 +63,21 @@ public class CategoryService : ICategoryService
         // Đảm bảo "Khác" luôn tồn tại trước khi query
         await GetOrCreateDefaultCategoryAsync(userId);
 
-        // Query một lần: join DanhMucChiTieu với ChiTieu để đếm transactionCount
-        // TransactionCount chỉ đếm giao dịch của user hiện tại, chưa bị xóa
+        // Lấy danh sách IdDanhMucGoc mà user đã override DaXoa = true (ẩn category chung)
+        var hiddenSystemIds = await _db.DanhMucChiTieus
+            .Where(d => d.IdNguoiDung == userId && d.IdDanhMucGoc != null && d.DaXoa)
+            .Select(d => d.IdDanhMucGoc!.Value)
+            .ToListAsync();
+
+        // Lấy danh mục của user (không phải override ẩn) + danh mục chung chưa bị user ẩn
         var result = await _db.DanhMucChiTieus
-            .Where(d => (d.IdNguoiDung == userId || d.IdNguoiDung == null) && !d.DaXoa)
+            .Where(d =>
+                !d.DaXoa &&
+                d.IdDanhMucGoc == null &&   // bỏ qua các record override
+                (
+                    d.IdNguoiDung == userId ||
+                    (d.IdNguoiDung == null && !hiddenSystemIds.Contains(d.IdDanhMuc))
+                ))
             .Select(d => new CategoryPickerDto
             {
                 IdDanhMuc = d.IdDanhMuc,
@@ -76,7 +87,7 @@ public class CategoryService : ICategoryService
                 TransactionCount = d.ChiTieus
                     .Count(c => c.IdNguoiDung == userId && !c.DaXoa)
             })
-            .OrderBy(d => d.TenDanhMuc == DefaultCategoryName ? 1 : 0) // "Khác" xuống cuối
+            .OrderBy(d => d.TenDanhMuc == DefaultCategoryName ? 1 : 0)
             .ThenBy(d => d.TenDanhMuc)
             .ToListAsync();
 
@@ -87,25 +98,19 @@ public class CategoryService : ICategoryService
         long userId, string name, string? icon, string? color)
     {
         var trimmedName = name.Trim();
+        var trimmedNameLower = trimmedName.ToLower();
 
         // Không cho tạo trùng "Khác" — category mặc định do hệ thống quản lý
         if (trimmedName.Equals(DefaultCategoryName, StringComparison.OrdinalIgnoreCase))
             return (null, "Danh mục đã tồn tại");
 
-        // Kiểm tra trùng với category của chính user (chưa xóa)
-        var duplicateUser = await _db.DanhMucChiTieus.AnyAsync(d =>
+        // Chỉ check trùng trong danh mục riêng của user — shared categories (IdNguoiDung == null)
+        // không tính là duplicate, user được phép tạo category cùng tên với shared category
+        var duplicate = await _db.DanhMucChiTieus.AnyAsync(d =>
             d.IdNguoiDung == userId &&
-            d.TenDanhMuc == trimmedName &&
-            !d.DaXoa);
-        if (duplicateUser)
-            return (null, "Danh mục đã tồn tại");
-
-        // Kiểm tra trùng với category hệ thống (IdNguoiDung IS NULL)
-        var duplicateSystem = await _db.DanhMucChiTieus.AnyAsync(d =>
-            d.IdNguoiDung == null &&
-            d.TenDanhMuc == trimmedName &&
-            !d.DaXoa);
-        if (duplicateSystem)
+            !d.DaXoa &&
+            d.TenDanhMuc.ToLower() == trimmedNameLower);
+        if (duplicate)
             return (null, "Danh mục đã tồn tại");
 
         var entity = new DanhMucChiTieu

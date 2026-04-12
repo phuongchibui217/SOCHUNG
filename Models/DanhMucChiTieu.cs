@@ -4,6 +4,7 @@ public class DanhMucChiTieu
 {
     public long IdDanhMuc { get; set; }
     public long? IdNguoiDung { get; set; }
+    public long? IdDanhMucGoc { get; set; }   // null = không phải override; có giá trị = override từ category chung
     public string TenDanhMuc { get; set; } = string.Empty;
     public string? Icon { get; set; }
     public string? MauSac { get; set; }

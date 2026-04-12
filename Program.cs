@@ -1,10 +1,13 @@
+
+
 using ExpenseManagerAPI.Data;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
-
+// Fix Npgsql timestamp behavior: cho phép DateTime Kind=Unspecified map sang timestamp (không ép UTC)
+AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 var builder = WebApplication.CreateBuilder(args);
 
 var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
@@ -156,6 +159,24 @@ builder.Services.AddCors(options =>
 // The launchSettings.json localhost binding is intentional for local dev safety.
 
 var app = builder.Build();
+
+// ── Enable PostgreSQL extensions cần thiết ────────────────────────────────────
+// unaccent: hỗ trợ tìm kiếm không dấu tiếng Việt (accent-insensitive search)
+// Chạy khi app start — idempotent, an toàn khi chạy nhiều lần.
+// Supabase đã có sẵn extension này, chỉ cần enable cho schema hiện tại.
+try
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<SoChungDbContext>();
+    await db.Database.ExecuteSqlRawAsync("CREATE EXTENSION IF NOT EXISTS unaccent;");
+    Console.WriteLine("[Startup] unaccent extension enabled.");
+}
+catch (Exception ex)
+{
+    // Không crash app nếu không có quyền tạo extension
+    // Search sẽ fallback sang ILike thường (case-insensitive, không accent-insensitive)
+    Console.WriteLine($"[Startup] WARNING: Could not enable unaccent extension: {ex.Message}");
+}
 
 // ── Middleware Pipeline ───────────────────────────────────────────────────────
 

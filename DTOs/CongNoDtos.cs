@@ -129,10 +129,17 @@ public class DebtSearchItemDto
     public string TransactionType { get; set; } = string.Empty;
     public string PersonName { get; set; } = string.Empty;
     public decimal Amount { get; set; }
+    public decimal RemainingAmount { get; set; }
     public string OccurredDate { get; set; } = string.Empty;
     public string? DueDate { get; set; }
     public string Status { get; set; } = string.Empty;
+    /// <summary>OVERDUE | DUE_SOON | NORMAL_OPEN | COMPLETED</summary>
+    public string DisplayStatus { get; set; } = string.Empty;
     public string? Note { get; set; }
+    /// <summary>Tổng còn lại của tất cả khoản NỢ (NO) chưa hoàn tất của người này</summary>
+    public decimal PersonOutstandingDebtTotal { get; set; }
+    /// <summary>Tổng còn lại của tất cả khoản CHO VAY chưa hoàn tất của người này</summary>
+    public decimal PersonOutstandingLendingTotal { get; set; }
 }
 
 /// <summary>
@@ -153,6 +160,7 @@ public class DebtSearchResultDto
 public class DebtSuggestionDto
 {
     public long DebtId { get; set; }
+    public string TransactionType { get; set; } = string.Empty;
     public string PersonName { get; set; } = string.Empty;
     public decimal Amount { get; set; }
     public string Status { get; set; } = string.Empty;

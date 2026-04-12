@@ -87,62 +87,121 @@ public class DashboardService : IDashboardService
 
     // -------------------------------------------------------------------------
     // GetTotalExpenseAsync
+    // Dùng range [from, toExclusive) để tránh lệch timezone khi so sánh date.
     // -------------------------------------------------------------------------
     public async Task<decimal> GetTotalExpenseAsync(long userId, DateTime from, DateTime to)
     {
-        return await _db.ChiTieus
+        var toExclusive = to.Date.AddDays(1);
+        var result = await _db.ChiTieus
             .Where(c => c.IdNguoiDung == userId
                      && !c.DaXoa
-                     && c.NgayChi >= from
-                     && c.NgayChi <= to)
+                     && c.NgayChi >= from.Date
+                     && c.NgayChi < toExclusive)
             .SumAsync(c => (decimal?)c.SoTien) ?? 0m;
+
+        Console.WriteLine($"[Dashboard] GetTotalExpense userId={userId} from={from:yyyy-MM-dd} to={to:yyyy-MM-dd} => {result}");
+        return result;
     }
 
     // -------------------------------------------------------------------------
     // GetTotalDebtAsync
-    // Tổng công nợ = tổng SoTien phát sinh (cả NO lẫn CHO_VAY) trong kỳ,
-    // chưa xóa mềm. Convention: phản ánh tổng giá trị công nợ phát sinh,
-    // không phân biệt chiều vay/cho vay.
+    // NgayPhatSinh là timestamp — cast về date bằng EF.Property để tránh
+    // .Date không translate được sang PostgreSQL.
     // -------------------------------------------------------------------------
     public async Task<decimal> GetTotalDebtAsync(long userId, DateTime from, DateTime to)
     {
-        return await _db.CongNos
+        var toExclusive = to.Date.AddDays(1);
+        var result = await _db.CongNos
             .Where(c => c.IdNguoiDung == userId
                      && !c.DaXoa
-                     && c.NgayPhatSinh.Date >= from
-                     && c.NgayPhatSinh.Date <= to)
+                     && c.NgayPhatSinh >= from.Date
+                     && c.NgayPhatSinh < toExclusive)
             .SumAsync(c => (decimal?)c.SoTien) ?? 0m;
+
+        Console.WriteLine($"[Dashboard] GetTotalDebt userId={userId} from={from:yyyy-MM-dd} to={to:yyyy-MM-dd} => {result}");
+        return result;
+    }
+
+    // -------------------------------------------------------------------------
+    // GetTotalDebtByTypeAsync — tổng số tiền CÒN LẠI chưa thanh toán theo loại
+    // Chỉ tính khoản CHUA_TRA hoặc TRA_MOT_PHAN, phát sinh trong kỳ.
+    // Sum (SoTien - đã thanh toán) để phản ánh đúng số tiền thực tế còn nợ.
+    // -------------------------------------------------------------------------
+    public async Task<decimal> GetTotalDebtByTypeAsync(long userId, DateTime from, DateTime to, string loaiCongNo)
+    {
+        var toExclusive = to.Date.AddDays(1);
+
+        var khoans = await _db.CongNos
+            .Where(c => c.IdNguoiDung == userId
+                     && !c.DaXoa
+                     && c.LoaiCongNo == loaiCongNo
+                     && (c.TrangThai == "CHUA_TRA" || c.TrangThai == "TRA_MOT_PHAN")
+                     && c.NgayPhatSinh >= from.Date
+                     && c.NgayPhatSinh < toExclusive)
+            .Select(c => new
+            {
+                c.SoTien,
+                DaThanhToan = c.ThanhToanCongNos.Sum(t => (decimal?)t.SoTienThanhToan) ?? 0m
+            })
+            .ToListAsync();
+
+        var result = khoans.Sum(c => Math.Max(0, c.SoTien - c.DaThanhToan));
+
+        Console.WriteLine($"[Dashboard] GetTotalDebt({loaiCongNo}) userId={userId} from={from:yyyy-MM-dd} to={to:yyyy-MM-dd} count={khoans.Count} => {result}");
+        return result;
     }
 
     // -------------------------------------------------------------------------
     // GetTopCategoriesAsync
+    // Join trực tiếp sang DanhMucChiTieu với điều kiện !DaXoa để đảm bảo
+    // metadata (icon/color) đồng nhất với GET /api/categories.
+    // Nếu category đã soft-delete → fallback về "Khác" / "more_horiz" / "#9E9E9E".
     // -------------------------------------------------------------------------
     public async Task<List<TopCategoryDto>> GetTopCategoriesAsync(
         long userId, DateTime from, DateTime to)
     {
-        return await _db.ChiTieus
+        var toExclusive = to.Date.AddDays(1);
+
+        // Lấy raw data trong kỳ, kèm thông tin category (có thể null nếu đã xóa)
+        var raw = await _db.ChiTieus
             .Where(c => c.IdNguoiDung == userId
                      && !c.DaXoa
-                     && c.NgayChi >= from
-                     && c.NgayChi <= to)
-            .GroupBy(c => new
+                     && c.NgayChi >= from.Date
+                     && c.NgayChi < toExclusive)
+            .Select(c => new
             {
                 c.IdDanhMuc,
-                TenDanhMuc = c.DanhMucChiTieu != null ? c.DanhMucChiTieu.TenDanhMuc : "Khác",
-                Icon = c.DanhMucChiTieu != null ? c.DanhMucChiTieu.Icon : "more_horiz",
-                Color = c.DanhMucChiTieu != null ? c.DanhMucChiTieu.MauSac : "#9E9E9E"
+                c.SoTien,
+                // Chỉ lấy metadata nếu category còn active (!DaXoa)
+                CategoryName  = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
+                                    ? c.DanhMucChiTieu.TenDanhMuc : (string?)null,
+                CategoryIcon  = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
+                                    ? c.DanhMucChiTieu.Icon : (string?)null,
+                CategoryColor = c.DanhMucChiTieu != null && !c.DanhMucChiTieu.DaXoa
+                                    ? c.DanhMucChiTieu.MauSac : (string?)null,
             })
-            .Select(g => new TopCategoryDto
+            .ToListAsync();
+
+        // Group trong memory — tránh EF translate phức tạp với nullable string
+        return raw
+            .GroupBy(c => c.IdDanhMuc)
+            .Select(g =>
             {
-                CategoryId = g.Key.IdDanhMuc,
-                CategoryName = g.Key.TenDanhMuc,
-                Icon = g.Key.Icon,
-                Color = g.Key.Color,
-                Amount = g.Sum(c => c.SoTien)
+                var first = g.First();
+                // Nếu category đã bị soft-delete thì first.CategoryName == null → fallback
+                var isActive = first.CategoryName != null;
+                return new TopCategoryDto
+                {
+                    CategoryId   = g.Key,
+                    CategoryName = isActive ? first.CategoryName! : "Khác",
+                    Icon         = isActive ? first.CategoryIcon  : "more_horiz",
+                    Color        = isActive ? first.CategoryColor : "#9E9E9E",
+                    Amount       = g.Sum(c => c.SoTien)
+                };
             })
             .OrderByDescending(x => x.Amount)
             .Take(3)
-            .ToListAsync();
+            .ToList();
     }
 
     // -------------------------------------------------------------------------
@@ -185,16 +244,16 @@ public class DashboardService : IDashboardService
     private async Task<List<ChartPointDto>> BuildWeekChartAsync(
         long userId, DateTime from, DateTime to)
     {
-        // Lấy tất cả chi tiêu và công nợ trong tuần — 2 query
+        var toExclusive = to.Date.AddDays(1);
         var expenses = await _db.ChiTieus
             .Where(c => c.IdNguoiDung == userId && !c.DaXoa
-                     && c.NgayChi >= from && c.NgayChi <= to)
+                     && c.NgayChi >= from.Date && c.NgayChi < toExclusive)
             .Select(c => new { c.NgayChi, c.SoTien })
             .ToListAsync();
 
         var debts = await _db.CongNos
             .Where(c => c.IdNguoiDung == userId && !c.DaXoa
-                     && c.NgayPhatSinh.Date >= from && c.NgayPhatSinh.Date <= to)
+                     && c.NgayPhatSinh >= from.Date && c.NgayPhatSinh < toExclusive)
             .Select(c => new { Date = c.NgayPhatSinh.Date, c.SoTien })
             .ToListAsync();
 
@@ -215,15 +274,16 @@ public class DashboardService : IDashboardService
     private async Task<List<ChartPointDto>> BuildMonthChartAsync(
         long userId, DateTime from, DateTime to)
     {
+        var toExclusive = to.Date.AddDays(1);
         var expenses = await _db.ChiTieus
             .Where(c => c.IdNguoiDung == userId && !c.DaXoa
-                     && c.NgayChi >= from && c.NgayChi <= to)
+                     && c.NgayChi >= from.Date && c.NgayChi < toExclusive)
             .Select(c => new { c.NgayChi, c.SoTien })
             .ToListAsync();
 
         var debts = await _db.CongNos
             .Where(c => c.IdNguoiDung == userId && !c.DaXoa
-                     && c.NgayPhatSinh.Date >= from && c.NgayPhatSinh.Date <= to)
+                     && c.NgayPhatSinh >= from.Date && c.NgayPhatSinh < toExclusive)
             .Select(c => new { Date = c.NgayPhatSinh.Date, c.SoTien })
             .ToListAsync();
 
@@ -261,15 +321,16 @@ public class DashboardService : IDashboardService
         if (span <= 31)
         {
             // Theo từng ngày
+            var toExclusive = to.Date.AddDays(1);
             var expenses = await _db.ChiTieus
                 .Where(c => c.IdNguoiDung == userId && !c.DaXoa
-                         && c.NgayChi >= from && c.NgayChi <= to)
+                         && c.NgayChi >= from.Date && c.NgayChi < toExclusive)
                 .Select(c => new { c.NgayChi, c.SoTien })
                 .ToListAsync();
 
             var debts = await _db.CongNos
                 .Where(c => c.IdNguoiDung == userId && !c.DaXoa
-                         && c.NgayPhatSinh.Date >= from && c.NgayPhatSinh.Date <= to)
+                         && c.NgayPhatSinh >= from.Date && c.NgayPhatSinh < toExclusive)
                 .Select(c => new { Date = c.NgayPhatSinh.Date, c.SoTien })
                 .ToListAsync();
 

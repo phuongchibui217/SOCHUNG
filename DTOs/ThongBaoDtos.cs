@@ -5,6 +5,8 @@ public class NotificationDto
 {
     public long NotificationId { get; set; }
     public long? DebtId { get; set; }
+    /// <summary>NO | CHO_VAY — để FE deep-link đúng màn hình, không cần parse text</summary>
+    public string? DebtType { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Content { get; set; } = string.Empty;
     public string NotificationType { get; set; } = string.Empty;

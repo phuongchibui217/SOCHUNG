@@ -193,7 +193,10 @@ public class DebtsController : ControllerBase
     // -------------------------------------------------------------------------
     // GET /api/debts/{userId}  — giữ lại để tương thích
     // -------------------------------------------------------------------------
-    [HttpGet("{userId}")]
+    // GET /api/debts/by-user/{userId}  — giữ lại để tương thích (legacy, đổi path tránh conflict)
+    // Route cũ GET /api/debts/{userId} bị conflict với GET /api/debts/{id} của FE
+    // -------------------------------------------------------------------------
+    [HttpGet("by-user/{userId:long}")]
     public async Task<IActionResult> GetByUser(long userId)
     {
         var list = await _db.CongNos
@@ -224,16 +227,24 @@ public class DebtsController : ControllerBase
     // GET /api/debts/{id}  — chi tiết 1 khoản công nợ (spec FE)
     // Route constraint "detail" để tránh conflict với {userId} legacy
     // -------------------------------------------------------------------------
-    [HttpGet("{id:long}/detail")]
-    public async Task<IActionResult> GetDebtDetail(long id)    {
+    [HttpGet("{id:long}")]         // GET /api/debts/5  ← FE đang gọi
+    [HttpGet("{id:long}/detail")]  // GET /api/debts/5/detail ← alias
+    [HttpGet("{id:long}/info")]    // GET /api/debts/5/info   ← alias
+    public async Task<IActionResult> GetDebtDetail(long id)
+    {
         var userId = GetCurrentUserId();
+
+        Console.WriteLine($"[DebtDetail] GET id={id} userId={userId}");
 
         var entity = await _db.CongNos
             .Include(c => c.ThanhToanCongNos)
             .FirstOrDefaultAsync(c => c.IdCongNo == id && c.IdNguoiDung == userId && !c.DaXoa);
 
         if (entity == null)
+        {
+            Console.WriteLine($"[DebtDetail] NOT FOUND id={id} userId={userId}");
             return NotFound(new { message = "Công nợ không tồn tại." });
+        }
 
         var paidAmount = entity.ThanhToanCongNos.Sum(t => t.SoTienThanhToan);
         var remainingAmount = Math.Max(0, entity.SoTien - paidAmount);
@@ -317,20 +328,23 @@ public class DebtsController : ControllerBase
 
     // -------------------------------------------------------------------------
     // GET /api/debts/people/suggestions?keyword=...
-    // Gợi ý người giao dịch từ lịch sử CongNo của user
+    // Gợi ý người giao dịch từ lịch sử CongNo của user.
+    // Dùng ILike để search case-insensitive (PostgreSQL native).
     // -------------------------------------------------------------------------
     [HttpGet("people/suggestions")]
     public async Task<IActionResult> GetPeopleSuggestions([FromQuery] string? keyword)
     {
         var userId = GetCurrentUserId();
+        var kw = keyword?.Trim();
+
+        Console.WriteLine($"[PeopleSuggestions] userId={userId} keyword_received='{keyword}' keyword_trimmed='{kw}'");
 
         // Lấy tất cả khoản chưa xóa của user, group theo TenNguoi
         var query = _db.CongNos
-            .Include(c => c.ThanhToanCongNos)
             .Where(c => c.IdNguoiDung == userId && !c.DaXoa);
 
-        if (!string.IsNullOrWhiteSpace(keyword))
-            query = query.Where(c => c.TenNguoi.Contains(keyword.Trim()));
+        if (!string.IsNullOrEmpty(kw))
+            query = query.Where(c => EF.Functions.ILike(c.TenNguoi, "%" + kw + "%"));
 
         var raw = await query
             .Select(c => new
@@ -342,13 +356,14 @@ public class DebtsController : ControllerBase
             })
             .ToListAsync();
 
+        Console.WriteLine($"[PeopleSuggestions] raw_count={raw.Count}");
+
         // Group theo TenNguoi trong memory
         var suggestions = raw
             .GroupBy(c => c.TenNguoi)
             .Select(g => new PersonSuggestionDto
             {
                 PersonName = g.Key,
-                // Tổng ConLai của các khoản chưa thanh toán xong
                 CurrentOutstanding = g
                     .Where(c => c.TrangThai == "CHUA_TRA" || c.TrangThai == "TRA_MOT_PHAN")
                     .Sum(c => c.SoTien - c.DaThanhToan),
@@ -359,25 +374,26 @@ public class DebtsController : ControllerBase
             .ThenBy(x => x.PersonName)
             .ToList();
 
+        Console.WriteLine($"[PeopleSuggestions] suggestions_count={suggestions.Count}");
+
         return Ok(new { message = "Lấy danh sách gợi ý thành công", data = suggestions });
     }
 
     // -------------------------------------------------------------------------
     // GET /api/debts/search
     // Tìm kiếm công nợ theo keyword + statusFilter, có phân trang.
+    // Tìm toàn bộ (cả NO lẫn CHO_VAY) — không filter theo transactionType.
     //
-    // Accent-insensitive strategy (SQL Server):
-    //   Dùng EF.Functions.Collate(column, "Latin1_General_CI_AI") + EF.Functions.Like()
-    //   CI = case-insensitive, AI = accent-insensitive.
-    //   "anh thanh" sẽ match "Anh Thành" trực tiếp ở DB layer.
-    //
-    // Phạm vi search: TenNguoi, NoiDung, SoTien (dạng text)
-    // StatusFilter: DUE_SOON | OVERDUE | COMPLETED (timezone UTC+7)
+    // Keyword: tìm trong TenNguoi, NoiDung, SoTien — accent-insensitive (unaccent),
+    //          case-insensitive (ILike), fallback ILike nếu unaccent chưa enable.
+    // StatusFilter: DUE_SOON | OVERDUE | COMPLETED
+    //   DUE_SOON  → HanTra - Today ∈ [1, 3] (tức HanTra trong [today+1, today+3])
+    //   OVERDUE   → HanTra < today, chưa hoàn tất
+    //   COMPLETED → TrangThai = DA_TRA
     // -------------------------------------------------------------------------
     [HttpGet("search")]
     public async Task<IActionResult> Search([FromQuery] DebtSearchQuery query)
     {
-        // Validate statusFilter trước khi ModelState (vì là string tự do)
         var validFilters = new[] { "DUE_SOON", "OVERDUE", "COMPLETED" };
         if (!string.IsNullOrEmpty(query.StatusFilter) &&
             !validFilters.Contains(query.StatusFilter.ToUpper()))
@@ -400,10 +416,9 @@ public class DebtsController : ControllerBase
             return BadRequest(new { message = "Dữ liệu không hợp lệ", errors });
         }
 
-        var userId = GetCurrentUserId();
-
-        // Validate keyword
+        var userId  = GetCurrentUserId();
         var keyword = query.Keyword?.TrimStart();
+
         if (keyword != null)
         {
             if (keyword.Length == 0)
@@ -413,7 +428,6 @@ public class DebtsController : ControllerBase
                     errors = new { keyword = new[] { "Vui lòng nhập thông tin" } }
                 });
 
-            // Chặn ký tự đặc biệt nguy hiểm (giữ chữ, số, khoảng trắng, dấu tiếng Việt, dấu câu thông thường)
             if (System.Text.RegularExpressions.Regex.IsMatch(keyword, @"[<>""'%;()&+\-\*\/\\]"))
                 return BadRequest(new
                 {
@@ -422,27 +436,48 @@ public class DebtsController : ControllerBase
                 });
         }
 
-        // Timezone UTC+7 — dùng nhất quán với hệ thống
-        var vnTz = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
+        var vnTz  = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
         var today = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, vnTz).Date;
-        var tomorrow = today.AddDays(1);
 
-        const string CI_AI = "Latin1_General_CI_AI";
+        Console.WriteLine($"[DebtSearch] userId={userId} keyword='{keyword}' statusFilter='{query.StatusFilter}' today={today:yyyy-MM-dd}");
 
         var q = _db.CongNos
+            .Include(c => c.ThanhToanCongNos)
             .Where(c => c.IdNguoiDung == userId && !c.DaXoa)
             .AsQueryable();
 
-        // --- Keyword filter (ILike = case-insensitive, Postgres native) ---
+        // --- Keyword filter: unaccent (accent-insensitive) + ILike (case-insensitive) ---
         if (!string.IsNullOrEmpty(keyword))
         {
-            q = q.Where(c =>
-                EF.Functions.ILike(c.TenNguoi, "%" + keyword + "%")
-                ||
-                (c.NoiDung != null && EF.Functions.ILike(c.NoiDung, "%" + keyword + "%"))
-                ||
-                EF.Functions.ILike(c.SoTien.ToString(), "%" + keyword + "%")
-            );
+            var pattern = "%" + keyword + "%";
+            try
+            {
+                q = q.Where(c =>
+                    EF.Functions.ILike(AppDb.Unaccent(c.TenNguoi), AppDb.Unaccent(pattern))
+                    ||
+                    (c.NoiDung != null && EF.Functions.ILike(AppDb.Unaccent(c.NoiDung), AppDb.Unaccent(pattern)))
+                    ||
+                    EF.Functions.ILike(c.SoTien.ToString(), pattern)
+                );
+                // Probe để phát hiện lỗi unaccent sớm
+                await q.CountAsync();
+            }
+            catch (Exception ex) when (
+                ex.Message.Contains("unaccent") ||
+                ex.InnerException?.Message.Contains("unaccent") == true)
+            {
+                Console.WriteLine($"[DebtSearch] unaccent unavailable, fallback ILike: {ex.Message}");
+                q = _db.CongNos
+                    .Include(c => c.ThanhToanCongNos)
+                    .Where(c => c.IdNguoiDung == userId && !c.DaXoa);
+                q = q.Where(c =>
+                    EF.Functions.ILike(c.TenNguoi, pattern)
+                    ||
+                    (c.NoiDung != null && EF.Functions.ILike(c.NoiDung, pattern))
+                    ||
+                    EF.Functions.ILike(c.SoTien.ToString(), pattern)
+                );
+            }
         }
 
         // --- StatusFilter ---
@@ -451,15 +486,18 @@ public class DebtsController : ControllerBase
             switch (query.StatusFilter.ToUpper())
             {
                 case "DUE_SOON":
-                    // Sắp đến hạn: HanTra = ngày mai, chưa hoàn tất
+                    // DueDate - Today ∈ [1, 3]: HanTra trong [today+1, today+3], chưa hoàn tất
+                    var dueSoonFrom = today.AddDays(1);
+                    var dueSoonTo   = today.AddDays(3);
                     q = q.Where(c =>
                         c.HanTra.HasValue &&
-                        c.HanTra.Value.Date == tomorrow &&
+                        c.HanTra.Value.Date >= dueSoonFrom &&
+                        c.HanTra.Value.Date <= dueSoonTo &&
                         (c.TrangThai == "CHUA_TRA" || c.TrangThai == "TRA_MOT_PHAN"));
                     break;
 
                 case "OVERDUE":
-                    // Quá hạn: HanTra < hôm nay, chưa hoàn tất
+                    // HanTra < today, chưa hoàn tất
                     q = q.Where(c =>
                         c.HanTra.HasValue &&
                         c.HanTra.Value.Date < today &&
@@ -472,7 +510,6 @@ public class DebtsController : ControllerBase
             }
         }
 
-        // Sắp xếp mới nhất trước
         q = q.OrderByDescending(c => c.NgayPhatSinh).ThenByDescending(c => c.IdCongNo);
 
         var pageSize   = Math.Clamp(query.PageSize, 1, 15);
@@ -480,21 +517,68 @@ public class DebtsController : ControllerBase
         var totalItems = await q.CountAsync();
         var totalPages = (int)Math.Ceiling((double)totalItems / pageSize);
 
-        var items = await q
+        Console.WriteLine($"[DebtSearch] totalItems={totalItems} page={page}/{totalPages}");
+
+        // Fetch về memory để tính RemainingAmount, DisplayStatus và outstanding theo người
+        var raw = await q
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Select(c => new DebtSearchItemDto
-            {
-                DebtId          = c.IdCongNo,
-                TransactionType = c.LoaiCongNo,
-                PersonName      = c.TenNguoi,
-                Amount          = c.SoTien,
-                OccurredDate    = c.NgayPhatSinh.ToString("yyyy-MM-dd"),
-                DueDate         = c.HanTra != null ? c.HanTra.Value.ToString("yyyy-MM-dd") : null,
-                Status          = c.TrangThai,
-                Note            = c.NoiDung
-            })
             .ToListAsync();
+
+        // Tính tổng outstanding theo (TenNguoi, LoaiCongNo) từ TOÀN BỘ khoản chưa hoàn tất của user
+        // — không giới hạn trong page hiện tại để số liệu luôn chính xác
+        var allOpen = await _db.CongNos
+            .Include(c => c.ThanhToanCongNos)
+            .Where(c => c.IdNguoiDung == userId && !c.DaXoa &&
+                        (c.TrangThai == "CHUA_TRA" || c.TrangThai == "TRA_MOT_PHAN"))
+            .ToListAsync();
+
+        // Key: (tenNguoi, loaiCongNo) → tổng còn lại
+        var outstandingMap = allOpen
+            .GroupBy(c => (c.TenNguoi, c.LoaiCongNo))
+            .ToDictionary(
+                g => g.Key,
+                g => g.Sum(c => Math.Max(0, c.SoTien - c.ThanhToanCongNos.Sum(t => t.SoTienThanhToan)))
+            );
+
+        var items = raw.Select(c =>
+        {
+            var paid      = c.ThanhToanCongNos.Sum(t => t.SoTienThanhToan);
+            var remaining = Math.Max(0, c.SoTien - paid);
+
+            string displayStatus;
+            if (remaining == 0)
+                displayStatus = "COMPLETED";
+            else if (c.HanTra.HasValue && c.HanTra.Value.Date < today)
+                displayStatus = "OVERDUE";
+            else if (c.HanTra.HasValue && c.HanTra.Value.Date >= today.AddDays(1) && c.HanTra.Value.Date <= today.AddDays(3))
+                displayStatus = "DUE_SOON";
+            else
+                displayStatus = "NORMAL_OPEN";
+
+            var debtTotal    = outstandingMap.GetValueOrDefault((c.TenNguoi, "NO"),    0);
+            var lendingTotal = outstandingMap.GetValueOrDefault((c.TenNguoi, "CHO_VAY"), 0);
+
+            Console.WriteLine(
+                $"[DebtSearch] item debtId={c.IdCongNo} person='{c.TenNguoi}' type={c.LoaiCongNo} " +
+                $"remaining={remaining} debtTotal={debtTotal} lendingTotal={lendingTotal}");
+
+            return new DebtSearchItemDto
+            {
+                DebtId                       = c.IdCongNo,
+                TransactionType              = c.LoaiCongNo,
+                PersonName                   = c.TenNguoi,
+                Amount                       = c.SoTien,
+                RemainingAmount              = remaining,
+                OccurredDate                 = c.NgayPhatSinh.ToString("yyyy-MM-dd"),
+                DueDate                      = c.HanTra?.ToString("yyyy-MM-dd"),
+                Status                       = c.TrangThai,
+                DisplayStatus                = displayStatus,
+                Note                         = c.NoiDung,
+                PersonOutstandingDebtTotal    = debtTotal,
+                PersonOutstandingLendingTotal = lendingTotal
+            };
+        }).ToList();
 
         return Ok(new
         {
@@ -513,6 +597,7 @@ public class DebtsController : ControllerBase
     // -------------------------------------------------------------------------
     // GET /api/debts/search/suggestions
     // Gợi ý nhanh top 5 theo keyword — tìm trong TenNguoi và NoiDung.
+    // Tìm toàn bộ (cả NO lẫn CHO_VAY).
     // -------------------------------------------------------------------------
     [HttpGet("search/suggestions")]
     public async Task<IActionResult> SearchSuggestions([FromQuery] string? keyword)
@@ -533,27 +618,61 @@ public class DebtsController : ControllerBase
                 errors = new { keyword = new[] { "Không được vượt quá 100 ký tự" } }
             });
 
-        var userId = GetCurrentUserId();
+        var userId  = GetCurrentUserId();
+        var pattern = "%" + kw + "%";
 
-        var suggestions = await _db.CongNos
-            .Where(c => c.IdNguoiDung == userId && !c.DaXoa &&
-                (
-                    EF.Functions.ILike(c.TenNguoi, "%" + kw + "%")
-                    ||
-                    (c.NoiDung != null && EF.Functions.ILike(c.NoiDung, "%" + kw + "%"))
-                ))
-            .OrderByDescending(c => c.NgayPhatSinh)
-            .Take(5)
-            .Select(c => new DebtSuggestionDto
-            {
-                DebtId     = c.IdCongNo,
-                PersonName = c.TenNguoi,
-                Amount     = c.SoTien,
-                Status     = c.TrangThai,
-                Note       = c.NoiDung
-            })
-            .ToListAsync();
+        Console.WriteLine($"[DebtSuggestions] userId={userId} keyword='{kw}'");
 
+        List<DebtSuggestionDto> suggestions;
+        try
+        {
+            suggestions = await _db.CongNos
+                .Where(c => c.IdNguoiDung == userId && !c.DaXoa &&
+                    (
+                        EF.Functions.ILike(AppDb.Unaccent(c.TenNguoi), AppDb.Unaccent(pattern))
+                        ||
+                        (c.NoiDung != null && EF.Functions.ILike(AppDb.Unaccent(c.NoiDung), AppDb.Unaccent(pattern)))
+                    ))
+                .OrderByDescending(c => c.NgayPhatSinh)
+                .Take(5)
+                .Select(c => new DebtSuggestionDto
+                {
+                    DebtId          = c.IdCongNo,
+                    TransactionType = c.LoaiCongNo,
+                    PersonName      = c.TenNguoi,
+                    Amount          = c.SoTien,
+                    Status          = c.TrangThai,
+                    Note            = c.NoiDung
+                })
+                .ToListAsync();
+        }
+        catch (Exception ex) when (
+            ex.Message.Contains("unaccent") ||
+            ex.InnerException?.Message.Contains("unaccent") == true)
+        {
+            Console.WriteLine($"[DebtSuggestions] unaccent unavailable, fallback ILike: {ex.Message}");
+            suggestions = await _db.CongNos
+                .Where(c => c.IdNguoiDung == userId && !c.DaXoa &&
+                    (
+                        EF.Functions.ILike(c.TenNguoi, pattern)
+                        ||
+                        (c.NoiDung != null && EF.Functions.ILike(c.NoiDung, pattern))
+                    ))
+                .OrderByDescending(c => c.NgayPhatSinh)
+                .Take(5)
+                .Select(c => new DebtSuggestionDto
+                {
+                    DebtId          = c.IdCongNo,
+                    TransactionType = c.LoaiCongNo,
+                    PersonName      = c.TenNguoi,
+                    Amount          = c.SoTien,
+                    Status          = c.TrangThai,
+                    Note            = c.NoiDung
+                })
+                .ToListAsync();
+        }
+
+        Console.WriteLine($"[DebtSuggestions] found={suggestions.Count}");
         return Ok(new { message = "Lấy gợi ý thành công", data = suggestions });
     }
 
@@ -589,11 +708,12 @@ public class DebtsController : ControllerBase
                 errors = new { occurredDate = new[] { "Ngày phát sinh không được lớn hơn ngày hiện tại." } }
             });
 
-        // 4. Resolve hạn trả — nếu không truyền thì = occurredDate + 7 ngày
-        var dueDate = request.DueDate?.Date ?? occurredDate.AddDays(7);
+        // 4. Resolve hạn trả — null nếu user không nhập, KHÔNG tự sinh +7 ngày
+        // "Nhắc nợ sau 7 ngày" là logic notification riêng, không liên quan HanTra
+        var dueDate = request.DueDate?.Date;
 
-        // Validate dueDate >= occurredDate
-        if (dueDate < occurredDate)
+        // Validate dueDate >= occurredDate (chỉ khi user có nhập)
+        if (dueDate.HasValue && dueDate.Value < occurredDate)
             return BadRequest(new
             {
                 message = "Dữ liệu không hợp lệ",
@@ -605,15 +725,15 @@ public class DebtsController : ControllerBase
         {
             var entity = new CongNo
             {
-                IdNguoiDung = userId,
-                TenNguoi = request.PersonName.Trim(),
-                SoTien = request.Amount,
-                LoaiCongNo = request.TransactionType.ToUpper(),
-                NoiDung = request.Note,
-                HanTra = dueDate,
+                IdNguoiDung  = userId,
+                TenNguoi     = request.PersonName.Trim(),
+                SoTien       = request.Amount,
+                LoaiCongNo   = request.TransactionType.ToUpper(),
+                NoiDung      = request.Note,
+                HanTra       = dueDate,   // null nếu user không nhập
                 NgayPhatSinh = occurredDate,
-                TrangThai = "CHUA_TRA",
-                DaXoa = false
+                TrangThai    = "CHUA_TRA",
+                DaXoa        = false
             };
 
             _db.CongNos.Add(entity);
@@ -629,13 +749,13 @@ public class DebtsController : ControllerBase
                     : "Đã ghi nhận khoản nợ thành công.",
                 data = new
                 {
-                    debtId = entity.IdCongNo,
+                    debtId          = entity.IdCongNo,
                     transactionType = entity.LoaiCongNo,
-                    personName = entity.TenNguoi,
-                    amount = entity.SoTien,
-                    occurredDate = occurredDate.ToString("yyyy-MM-dd"),
-                    dueDate = dueDate.ToString("yyyy-MM-dd"),
-                    note = entity.NoiDung,
+                    personName      = entity.TenNguoi,
+                    amount          = entity.SoTien,
+                    occurredDate    = occurredDate.ToString("yyyy-MM-dd"),
+                    dueDate         = dueDate?.ToString("yyyy-MM-dd"),   // null nếu không nhập
+                    note            = entity.NoiDung,
                     currentOutstandingOfPerson = outstanding
                 }
             });
@@ -897,8 +1017,6 @@ public class DebtsController : ControllerBase
         // Resolve ngày thanh toán — default hôm nay
         var paymentDate = request.PaymentDate?.Date ?? DateTime.Today;
 
-        // Dùng transaction để đảm bảo insert + update atomic
-        await using var tx = await _db.Database.BeginTransactionAsync();
         try
         {
             // 1. Insert bản ghi thanh toán mới
@@ -920,8 +1038,12 @@ public class DebtsController : ControllerBase
                            : newTotalPaid > 0        ? "TRA_MOT_PHAN"
                                                      : "CHUA_TRA";
 
+
+            Console.WriteLine(
+                $"[Payment] debtId={debtId} debtType={debt.LoaiCongNo} " +
+                $"amount={request.Amount} newRemaining={newRemainingAmount} status={debt.TrangThai}");
+
             await _db.SaveChangesAsync();
-            await tx.CommitAsync();
 
             return StatusCode(201, new
             {
@@ -937,9 +1059,9 @@ public class DebtsController : ControllerBase
                 }
             });
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            await tx.RollbackAsync();
+            Console.WriteLine($"[Payment] ERROR debtId={debtId}: {ex.Message}");
             return StatusCode(500, new { message = "Có lỗi xảy ra, vui lòng thử lại." });
         }
     }

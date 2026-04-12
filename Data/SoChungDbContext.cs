@@ -26,6 +26,13 @@ public class SoChungDbContext : DbContext
         // Tắt convention tự động lowercase của Npgsql
         modelBuilder.HasDefaultSchema(null);
 
+        // Map AppDb.Unaccent() → PostgreSQL unaccent() function
+        // Yêu cầu extension unaccent được cài trên DB (có sẵn trên Supabase):
+        //   CREATE EXTENSION IF NOT EXISTS unaccent;
+        modelBuilder.HasDbFunction(
+            typeof(AppDb).GetMethod(nameof(AppDb.Unaccent), new[] { typeof(string) })!
+        ).HasName("unaccent").IsBuiltIn(false);
+
         // NguoiDung
         modelBuilder.Entity<NguoiDung>(e =>
         {
@@ -49,13 +56,15 @@ public class SoChungDbContext : DbContext
             e.HasKey(x => x.IdDanhMuc);
             e.Property(x => x.IdDanhMuc).HasColumnName("IdDanhMuc");
             e.Property(x => x.IdNguoiDung).HasColumnName("IdNguoiDung");
+            e.Property(x => x.IdDanhMucGoc).HasColumnName("IdDanhMucGoc").IsRequired(false);
             e.Property(x => x.TenDanhMuc).HasColumnName("TenDanhMuc").IsRequired();
             e.Property(x => x.Icon).HasColumnName("Icon");
             e.Property(x => x.MauSac).HasColumnName("MauSac").HasMaxLength(7);
             e.Property(x => x.NgayTao).HasColumnName("NgayTao").HasDefaultValueSql("now()");
             e.Property(x => x.DaXoa).HasColumnName("DaXoa").HasDefaultValue(false);
             e.HasIndex(x => new { x.IdNguoiDung, x.TenDanhMuc }).IsUnique()
-                .HasDatabaseName("UQ_DanhMucChiTieu_IdNguoiDung_TenDanhMuc");
+                .HasDatabaseName("UQ_DanhMucChiTieu_IdNguoiDung_TenDanhMuc")
+                .HasFilter("\"IdNguoiDung\" IS NOT NULL");  // chỉ enforce unique trong scope từng user, không ảnh hưởng shared (null)
             e.HasOne(x => x.NguoiDung)
                 .WithMany(u => u.DanhMucChiTieus)
                 .HasForeignKey(x => x.IdNguoiDung)

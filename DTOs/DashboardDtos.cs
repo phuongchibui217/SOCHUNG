@@ -49,9 +49,11 @@ public class OverviewData
     public string FilterType { get; set; } = string.Empty;
     public DateRangeDto Range { get; set; } = new();
     public decimal TotalExpense { get; set; }
-    public decimal TotalDebt { get; set; }
+    public decimal TotalDebt { get; set; }   // LoaiCongNo = "NO"
+    public decimal TotalLoan { get; set; }   // LoaiCongNo = "CHO_VAY"
     public double? ExpenseTrendPercent { get; set; }
     public double? DebtTrendPercent { get; set; }
+    public double? LoanTrendPercent { get; set; }
     public List<TopCategoryDto> TopExpenseCategories { get; set; } = new();
     public List<ChartPointDto> ChartData { get; set; } = new();
 }

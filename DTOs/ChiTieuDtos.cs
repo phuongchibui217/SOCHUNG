@@ -88,9 +88,16 @@ public class ExpenseHistoryQuery
     // Tìm theo nội dung giao dịch
     public string? Keyword { get; set; }
 
-    // Lọc theo khoảng thời gian
+    // --- Filter theo khoảng thời gian (cách 1: truyền thẳng fromDate/toDate) ---
     public DateTime? FromDate { get; set; }
     public DateTime? ToDate { get; set; }
+
+    // --- Filter theo mode + date (cách 2: FE truyền 1 ngày + mode, BE tự tính range) ---
+    // mode: "day" | "week" | "month"
+    // date: ngày mốc, ví dụ "2026-04-12"
+    // Nếu có mode + date thì ưu tiên hơn fromDate/toDate
+    public string? Mode { get; set; }
+    public DateTime? Date { get; set; }
 
     // Lọc theo danh mục
     public long? CategoryId { get; set; }
@@ -103,7 +110,8 @@ public class ExpenseHistoryDto
     public long ExpenseId { get; set; }
     public string? Note { get; set; }
     public decimal Amount { get; set; }
-    public DateTime TransactionDate { get; set; }
+    /// <summary>Format yyyy-MM-dd — dễ parse, không có time component gây nhầm lẫn</summary>
+    public string TransactionDate { get; set; } = string.Empty;
     public long CategoryId { get; set; }
     public string CategoryName { get; set; } = string.Empty;
     public string? CategoryIcon { get; set; }
@@ -117,11 +125,9 @@ public class ExpenseHistoryDto
 /// </summary>
 public class ExpenseSearchQuery
 {
-    // Từ khóa tìm kiếm — bắt buộc, 1–100 ký tự
-    [Required(ErrorMessage = "Keyword là bắt buộc")]
-    [MinLength(1, ErrorMessage = "Keyword phải có ít nhất 1 ký tự")]
+    // Keyword tùy chọn — rỗng thì trả toàn bộ (FE xử lý recent)
     [MaxLength(100, ErrorMessage = "Keyword không được vượt quá 100 ký tự")]
-    public string Keyword { get; set; } = string.Empty;
+    public string? Keyword { get; set; }
 
     public int Page { get; set; } = 1;
 
@@ -137,7 +143,8 @@ public class ExpenseSearchItemDto
     public long ExpenseId { get; set; }
     public string? Note { get; set; }
     public decimal Amount { get; set; }
-    public DateTime TransactionDate { get; set; }
+    /// <summary>Format yyyy-MM-dd</summary>
+    public string TransactionDate { get; set; } = string.Empty;
     public long CategoryId { get; set; }
     public string CategoryName { get; set; } = string.Empty;
     public string? CategoryIcon { get; set; }

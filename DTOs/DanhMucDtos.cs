@@ -9,6 +9,8 @@ public class DanhMucResponseDto
     public string TenDanhMuc { get; set; } = string.Empty;
     public string? Icon { get; set; }
     public string? MauSac { get; set; }
+    // Alias chuẩn hóa — cùng giá trị với MauSac, FE dùng field này
+    public string? Color => MauSac;
     public int TransactionCount { get; set; }
 }
 
@@ -19,6 +21,8 @@ public class CategoryPickerDto
     public string TenDanhMuc { get; set; } = string.Empty;
     public string? Icon { get; set; }
     public string? MauSac { get; set; }
+    // Alias chuẩn hóa — cùng giá trị với MauSac, FE dùng field này
+    public string? Color => MauSac;
     public int TransactionCount { get; set; }
 }
 
