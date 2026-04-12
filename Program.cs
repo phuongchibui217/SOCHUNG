@@ -142,21 +142,6 @@ if (env.IsDevelopment())
 
 app.UseCors("AllowAll");
 
-app.Use(async (context, next) =>
-{
-    context.Response.Headers["Access-Control-Allow-Origin"] = "*";
-    context.Response.Headers["Access-Control-Allow-Headers"] = "*";
-    context.Response.Headers["Access-Control-Allow-Methods"] = "*";
-
-    if (context.Request.Method == "OPTIONS")
-    {
-        context.Response.StatusCode = 200;
-        return;
-    }
-
-    await next();
-});
-
 // app.UseHttpsRedirection();
 
 app.UseAuthentication();
