@@ -44,8 +44,17 @@ public class EmailService : IEmailService
                 """
         };
 
+        _logger.LogInformation("[EmailService] Connecting to {Host}:{Port} user={User}", smtpHost, smtpPort, smtpUser);
+
         using var client = new SmtpClient();
-        await client.ConnectAsync(smtpHost, smtpPort, SecureSocketOptions.Auto);
+        client.Timeout = 15000; // 15 giây timeout
+
+        // Port 465 → SSL ngay từ đầu, port 587/25 → STARTTLS
+        var socketOptions = smtpPort == 465
+            ? SecureSocketOptions.SslOnConnect
+            : SecureSocketOptions.StartTls;
+
+        await client.ConnectAsync(smtpHost, smtpPort, socketOptions);
         await client.AuthenticateAsync(smtpUser, smtpPass);
         await client.SendAsync(message);
         await client.DisconnectAsync(true);
