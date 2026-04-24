@@ -114,12 +114,14 @@ public class DebtsController : ControllerBase
                           : paid > 0       ? "TRA_MOT_PHAN"
                                            : "CHUA_TRA";
 
+            var isChoVay = c.LoaiCongNo == "CHO_VAY";
             string displayStatus;
             int? overdueDays = null;
 
             if (remaining == 0)
             {
-                displayStatus = "DA_THU";
+                // Đã hoàn tất: tab Nợ → "DA_TRA", tab Cho vay → "DA_THU"
+                displayStatus = isChoVay ? "DA_THU" : "DA_TRA";
             }
             else if (c.HanTra.HasValue && c.HanTra.Value.Date < today)
             {
@@ -134,8 +136,12 @@ public class DebtsController : ControllerBase
             }
             else
             {
-                displayStatus = "DANG_CHO_VAY";
+                // Đang mở: tab Nợ → "DANG_NO", tab Cho vay → "DANG_CHO_VAY"
+                displayStatus = isChoVay ? "DANG_CHO_VAY" : "DANG_NO";
             }
+
+            // completedStatus: giá trị "đã xong" tương ứng với từng loại
+            var completedStatus = isChoVay ? "DA_THU" : "DA_TRA";
 
             return new DebtListItemDto
             {
@@ -145,7 +151,7 @@ public class DebtsController : ControllerBase
                 OriginalAmount         = c.SoTien,
                 PaidAmount             = paid,
                 RemainingAmount        = remaining,
-                PersonOutstandingTotal = displayStatus != "COMPLETED"
+                PersonOutstandingTotal = displayStatus != completedStatus
                                          ? outstandingByPerson.GetValueOrDefault(c.TenNguoi)
                                          : null,
                 OccurredDate  = c.NgayPhatSinh.ToString("yyyy-MM-dd"),
@@ -158,21 +164,25 @@ public class DebtsController : ControllerBase
         }).ToList();
 
         // 4. Áp dụng statusFilter
+        // completedStatus khác nhau theo transactionType — lấy từ item đầu tiên hoặc dùng query param
+        var isChoVayQuery = query.TransactionType.ToUpper() == "CHO_VAY";
+        var completedStatusFilter = isChoVayQuery ? "DA_THU" : "DA_TRA";
+
         var filtered = statusFilter switch
         {
-            "OPEN"      => mapped.Where(x => x.DisplayStatus != "DA_THU").ToList(),
-            "COMPLETED" => mapped.Where(x => x.DisplayStatus == "DA_THU").ToList(),
+            "OPEN"      => mapped.Where(x => x.DisplayStatus != completedStatusFilter).ToList(),
+            "COMPLETED" => mapped.Where(x => x.DisplayStatus == completedStatusFilter).ToList(),
             _           => mapped // ALL
         };
 
         // 5. Sort theo priority
-        // Priority order: OVERDUE=0, DUE_SOON=1, NORMAL_OPEN=2, COMPLETED=3
         static int DisplayPriority(string ds) => ds switch
         {
-            "QUA_HAN"    => 0,
+            "QUA_HAN"     => 0,
             "SAP_DEN_HAN" => 1,
+            "DANG_NO"     => 2,
             "DANG_CHO_VAY" => 2,
-            _             => 3  // DA_THU
+            _             => 3  // DA_TRA / DA_THU
         };
 
         var sorted = filtered
@@ -181,7 +191,7 @@ public class DebtsController : ControllerBase
             {
                 if (x.DisplayStatus is "QUA_HAN" or "SAP_DEN_HAN")
                     return x.DueDate ?? "9999-12-31";
-                if (x.DisplayStatus == "DANG_CHO_VAY")
+                if (x.DisplayStatus is "DANG_NO" or "DANG_CHO_VAY")
                     return x.DueDate ?? "0000-00-00";
                 return x.OccurredDate;
             })
@@ -543,16 +553,17 @@ public class DebtsController : ControllerBase
         {
             var paid      = c.ThanhToanCongNos.Sum(t => t.SoTienThanhToan);
             var remaining = Math.Max(0, c.SoTien - paid);
+            var isChoVay = c.LoaiCongNo == "CHO_VAY";
 
             string displayStatus;
             if (remaining == 0)
-                displayStatus = "DA_THU";
+                displayStatus = isChoVay ? "DA_THU" : "DA_TRA";
             else if (c.HanTra.HasValue && c.HanTra.Value.Date < today)
                 displayStatus = "QUA_HAN";
             else if (c.HanTra.HasValue && c.HanTra.Value.Date >= today.AddDays(1) && c.HanTra.Value.Date <= today.AddDays(3))
                 displayStatus = "SAP_DEN_HAN";
             else
-                displayStatus = "DANG_CHO_VAY";
+                displayStatus = isChoVay ? "DANG_CHO_VAY" : "DANG_NO";
 
             var debtTotal    = outstandingMap.GetValueOrDefault((c.TenNguoi, "NO"),    0);
             var lendingTotal = outstandingMap.GetValueOrDefault((c.TenNguoi, "CHO_VAY"), 0);
