@@ -91,9 +91,17 @@ public class AuthController : ControllerBase
             return BadRequest(new { message = "Dữ liệu không hợp lệ", errors });
         }
 
-        // Luôn trả 200 dù email có tồn tại hay không — tránh leak thông tin
-        await _authService.ForgotPasswordAsync(dto);
-        return Ok(new { message = "Đã gửi liên kết nếu email tồn tại" });
+        try
+        {
+            var result = await _authService.ForgotPasswordAsync(dto);
+            // Luôn trả 200 dù email có tồn tại hay không — tránh leak thông tin
+            return Ok(new { message = "Đã gửi liên kết nếu email tồn tại" });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ForgotPassword] ERROR email={dto.Email}: {ex.Message}\n{ex.StackTrace}");
+            return StatusCode(500, new { message = "Không thể gửi email. Vui lòng thử lại sau." });
+        }
     }
 
     [HttpPost("reset-password")]
