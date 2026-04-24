@@ -405,7 +405,8 @@ public class DebtsController : ControllerBase
     [HttpGet("search")]
     public async Task<IActionResult> Search([FromQuery] DebtSearchQuery query)
     {
-        var validFilters = new[] { "SAP_DEN_HAN", "QUA_HAN", "DA_THU" };
+        // Accept cả 2 bộ enum: tiếng Anh (FE cũ) và tiếng Việt (FE mới)
+        var validFilters = new[] { "SAP_DEN_HAN", "QUA_HAN", "DA_THU", "DUE_SOON", "OVERDUE", "COMPLETED" };
         if (!string.IsNullOrEmpty(query.StatusFilter) &&
             !validFilters.Contains(query.StatusFilter.ToUpper()))
         {
@@ -493,7 +494,16 @@ public class DebtsController : ControllerBase
         // --- StatusFilter ---
         if (!string.IsNullOrEmpty(query.StatusFilter))
         {
-            switch (query.StatusFilter.ToUpper())
+            // Normalize: map cả enum tiếng Anh (FE cũ) lẫn tiếng Việt (FE mới) về cùng 1 giá trị
+            var sf = query.StatusFilter.ToUpper() switch
+            {
+                "DUE_SOON"  => "SAP_DEN_HAN",
+                "OVERDUE"   => "QUA_HAN",
+                "COMPLETED" => "DA_THU",
+                var other   => other
+            };
+
+            switch (sf)
             {
                 case "SAP_DEN_HAN":
                     var dueSoonFrom = today.AddDays(1);
