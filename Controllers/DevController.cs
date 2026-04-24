@@ -1,4 +1,5 @@
 using ExpenseManagerAPI.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ExpenseManagerAPI.Controllers;
@@ -9,6 +10,7 @@ namespace ExpenseManagerAPI.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/dev")]
+[Authorize]  // bảo vệ thêm lớp 2 phòng khi env bị set sai
 public class DevController : ControllerBase
 {
     private readonly INotificationService _notificationService;

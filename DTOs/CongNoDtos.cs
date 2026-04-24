@@ -103,7 +103,6 @@ public class PaymentHistoryItemDto
 /// <summary>
 /// Query params cho GET /api/debts/search.
 /// keyword optional, statusFilter optional.
-/// Accent-insensitive: dùng SQL Server collation Latin1_General_CI_AI (xem controller).
 /// </summary>
 public class DebtSearchQuery
 {
@@ -111,7 +110,7 @@ public class DebtSearchQuery
     [MaxLength(100, ErrorMessage = "Không được vượt quá 100 ký tự")]
     public string? Keyword { get; set; }
 
-    // Optional — DUE_SOON | OVERDUE | COMPLETED
+    // Optional — SAP_DEN_HAN | QUA_HAN | DA_THU
     public string? StatusFilter { get; set; }
 
     public int Page { get; set; } = 1;

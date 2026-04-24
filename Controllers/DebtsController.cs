@@ -395,14 +395,14 @@ public class DebtsController : ControllerBase
     [HttpGet("search")]
     public async Task<IActionResult> Search([FromQuery] DebtSearchQuery query)
     {
-        var validFilters = new[] { "DUE_SOON", "OVERDUE", "COMPLETED" };
+        var validFilters = new[] { "SAP_DEN_HAN", "QUA_HAN", "DA_THU" };
         if (!string.IsNullOrEmpty(query.StatusFilter) &&
             !validFilters.Contains(query.StatusFilter.ToUpper()))
         {
             return BadRequest(new
             {
                 message = "Dữ liệu không hợp lệ",
-                errors = new { statusFilter = new[] { "statusFilter không hợp lệ. Chấp nhận: DUE_SOON, OVERDUE, COMPLETED" } }
+                errors = new { statusFilter = new[] { "statusFilter không hợp lệ. Chấp nhận: SAP_DEN_HAN, QUA_HAN, DA_THU" } }
             });
         }
 
@@ -485,8 +485,7 @@ public class DebtsController : ControllerBase
         {
             switch (query.StatusFilter.ToUpper())
             {
-                case "DUE_SOON":
-                    // DueDate - Today ∈ [1, 3]: HanTra trong [today+1, today+3], chưa hoàn tất
+                case "SAP_DEN_HAN":
                     var dueSoonFrom = today.AddDays(1);
                     var dueSoonTo   = today.AddDays(3);
                     q = q.Where(c =>
@@ -496,15 +495,14 @@ public class DebtsController : ControllerBase
                         (c.TrangThai == "CHUA_TRA" || c.TrangThai == "TRA_MOT_PHAN"));
                     break;
 
-                case "OVERDUE":
-                    // HanTra < today, chưa hoàn tất
+                case "QUA_HAN":
                     q = q.Where(c =>
                         c.HanTra.HasValue &&
                         c.HanTra.Value.Date < today &&
                         (c.TrangThai == "CHUA_TRA" || c.TrangThai == "TRA_MOT_PHAN"));
                     break;
 
-                case "COMPLETED":
+                case "DA_THU":
                     q = q.Where(c => c.TrangThai == "DA_TRA");
                     break;
             }
