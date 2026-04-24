@@ -86,6 +86,8 @@ public class DebtsController : ControllerBase
         const int DueSoonThresholdDays = 3;
         var today = TimeZoneHelper.TodayVn();
 
+        Console.WriteLine($"[GetMyDebts] userId={userId} transactionType={query.TransactionType} statusFilter={statusFilter}");
+
         // 1. Load tất cả khoản theo transactionType, chưa xóa
         var rawList = await _db.CongNos
             .Include(c => c.ThanhToanCongNos)
@@ -117,22 +119,22 @@ public class DebtsController : ControllerBase
 
             if (remaining == 0)
             {
-                displayStatus = "COMPLETED";
+                displayStatus = "DA_THU";
             }
             else if (c.HanTra.HasValue && c.HanTra.Value.Date < today)
             {
-                displayStatus = "OVERDUE";
+                displayStatus = "QUA_HAN";
                 overdueDays   = (int)(today - c.HanTra.Value.Date).TotalDays;
             }
             else if (c.HanTra.HasValue
                   && c.HanTra.Value.Date >= today
                   && (c.HanTra.Value.Date - today).TotalDays <= DueSoonThresholdDays)
             {
-                displayStatus = "DUE_SOON";
+                displayStatus = "SAP_DEN_HAN";
             }
             else
             {
-                displayStatus = "NORMAL_OPEN";
+                displayStatus = "DANG_CHO_VAY";
             }
 
             return new DebtListItemDto
@@ -158,8 +160,8 @@ public class DebtsController : ControllerBase
         // 4. Áp dụng statusFilter
         var filtered = statusFilter switch
         {
-            "OPEN"      => mapped.Where(x => x.DisplayStatus != "COMPLETED").ToList(),
-            "COMPLETED" => mapped.Where(x => x.DisplayStatus == "COMPLETED").ToList(),
+            "OPEN"      => mapped.Where(x => x.DisplayStatus != "DA_THU").ToList(),
+            "COMPLETED" => mapped.Where(x => x.DisplayStatus == "DA_THU").ToList(),
             _           => mapped // ALL
         };
 
@@ -167,25 +169,23 @@ public class DebtsController : ControllerBase
         // Priority order: OVERDUE=0, DUE_SOON=1, NORMAL_OPEN=2, COMPLETED=3
         static int DisplayPriority(string ds) => ds switch
         {
-            "OVERDUE"     => 0,
-            "DUE_SOON"    => 1,
-            "NORMAL_OPEN" => 2,
-            _             => 3  // COMPLETED
+            "QUA_HAN"    => 0,
+            "SAP_DEN_HAN" => 1,
+            "DANG_CHO_VAY" => 2,
+            _             => 3  // DA_THU
         };
 
         var sorted = filtered
             .OrderBy(x => DisplayPriority(x.DisplayStatus))
             .ThenBy(x =>
             {
-                // OVERDUE, DUE_SOON: HanTra gần nhất trước (ascending)
-                if (x.DisplayStatus is "OVERDUE" or "DUE_SOON")
+                if (x.DisplayStatus is "QUA_HAN" or "SAP_DEN_HAN")
                     return x.DueDate ?? "9999-12-31";
-                // NORMAL_OPEN: có HanTra → gần nhất trước; không có → sort sau
-                if (x.DisplayStatus == "NORMAL_OPEN")
-                    return x.DueDate ?? "0000-00-00"; // không có HanTra → xuống cuối nhóm
-                return x.OccurredDate; // COMPLETED: sẽ bị override bởi ThenByDescending
+                if (x.DisplayStatus == "DANG_CHO_VAY")
+                    return x.DueDate ?? "0000-00-00";
+                return x.OccurredDate;
             })
-            .ThenByDescending(x => x.OccurredDate) // NORMAL_OPEN không HanTra + COMPLETED
+            .ThenByDescending(x => x.OccurredDate)
             .ToList();
 
         return Ok(new { message = "Lấy danh sách công nợ thành công", data = sorted });
@@ -548,13 +548,13 @@ public class DebtsController : ControllerBase
 
             string displayStatus;
             if (remaining == 0)
-                displayStatus = "COMPLETED";
+                displayStatus = "DA_THU";
             else if (c.HanTra.HasValue && c.HanTra.Value.Date < today)
-                displayStatus = "OVERDUE";
+                displayStatus = "QUA_HAN";
             else if (c.HanTra.HasValue && c.HanTra.Value.Date >= today.AddDays(1) && c.HanTra.Value.Date <= today.AddDays(3))
-                displayStatus = "DUE_SOON";
+                displayStatus = "SAP_DEN_HAN";
             else
-                displayStatus = "NORMAL_OPEN";
+                displayStatus = "DANG_CHO_VAY";
 
             var debtTotal    = outstandingMap.GetValueOrDefault((c.TenNguoi, "NO"),    0);
             var lendingTotal = outstandingMap.GetValueOrDefault((c.TenNguoi, "CHO_VAY"), 0);
