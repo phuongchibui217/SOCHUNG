@@ -1,5 +1,6 @@
 using ExpenseManagerAPI.Data;
 using ExpenseManagerAPI.DTOs;
+using ExpenseManagerAPI.Helpers;
 using ExpenseManagerAPI.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -14,10 +15,12 @@ namespace ExpenseManagerAPI.Controllers;
 public class DebtsController : ControllerBase
 {
     private readonly SoChungDbContext _db;
+    private readonly ILogger<DebtsController> _logger;
 
-    public DebtsController(SoChungDbContext db)
+    public DebtsController(SoChungDbContext db, ILogger<DebtsController> logger)
     {
         _db = db;
+        _logger = logger;
     }
 
     private long GetCurrentUserId() =>
@@ -81,9 +84,7 @@ public class DebtsController : ControllerBase
 
         var userId = GetCurrentUserId();
         const int DueSoonThresholdDays = 3;
-
-        var vnTz = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
-        var today = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, vnTz).Date;
+        var today = TimeZoneHelper.TodayVn();
 
         // 1. Load tất cả khoản theo transactionType, chưa xóa
         var rawList = await _db.CongNos
@@ -436,8 +437,7 @@ public class DebtsController : ControllerBase
                 });
         }
 
-        var vnTz  = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
-        var today = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, vnTz).Date;
+        var today = TimeZoneHelper.TodayVn();
 
         Console.WriteLine($"[DebtSearch] userId={userId} keyword='{keyword}' statusFilter='{query.StatusFilter}' today={today:yyyy-MM-dd}");
 
@@ -691,6 +691,7 @@ public class DebtsController : ControllerBase
                     k => char.ToLower(k.Key[0]) + k.Key[1..],
                     v => v.Value!.Errors.Select(e => e.ErrorMessage).ToArray()
                 );
+            Console.WriteLine($"[CreateDebt] ModelState invalid: {System.Text.Json.JsonSerializer.Serialize(errors)}");
             return BadRequest(new { message = "Dữ liệu không hợp lệ", errors });
         }
 
@@ -700,8 +701,9 @@ public class DebtsController : ControllerBase
         catch { return Unauthorized(new { message = "Phiên đăng nhập không hợp lệ." }); }
 
         // 3. Resolve ngày phát sinh
-        var occurredDate = request.OccurredDate?.Date ?? DateTime.Today;
-        if (occurredDate > DateTime.Today)
+        var todayVn = TimeZoneHelper.TodayVn();
+        var occurredDate = request.OccurredDate?.Date ?? todayVn;
+        if (occurredDate > todayVn)
             return BadRequest(new
             {
                 message = "Dữ liệu không hợp lệ",
@@ -760,8 +762,9 @@ public class DebtsController : ControllerBase
                 }
             });
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "[CreateDebt] ERROR userId={UserId}", userId);
             return StatusCode(500, new { message = "Có lỗi xảy ra, vui lòng thử lại." });
         }
     }
@@ -854,8 +857,9 @@ public class DebtsController : ControllerBase
                 }
             });
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "[UpdateDebt] ERROR id={Id} userId={UserId}", id, userId);
             return StatusCode(500, new { message = "Không thể lưu khoản nợ này. Vui lòng kiểm tra lại thông tin." });
         }
     }
@@ -898,8 +902,9 @@ public class DebtsController : ControllerBase
 
             return Ok(new { message });
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "[DeleteDebt] ERROR id={Id} userId={UserId}", id, userId);
             return StatusCode(500, new { message = "Có lỗi xảy ra, vui lòng thử lại." });
         }
     }
@@ -1014,8 +1019,8 @@ public class DebtsController : ControllerBase
                 errors = new { amount = new[] { "Số tiền vượt quá dư nợ hiện tại" } }
             });
 
-        // Resolve ngày thanh toán — default hôm nay
-        var paymentDate = request.PaymentDate?.Date ?? DateTime.Today;
+        // Resolve ngày thanh toán — default hôm nay (giờ VN)
+        var paymentDate = request.PaymentDate?.Date ?? TimeZoneHelper.TodayVn();
 
         try
         {

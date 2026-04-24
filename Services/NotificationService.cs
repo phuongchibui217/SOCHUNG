@@ -1,5 +1,6 @@
 using ExpenseManagerAPI.Data;
 using ExpenseManagerAPI.DTOs;
+using ExpenseManagerAPI.Helpers;
 using ExpenseManagerAPI.Models;
 using Microsoft.EntityFrameworkCore;
 
@@ -7,16 +8,12 @@ namespace ExpenseManagerAPI.Services;
 
 public class NotificationService : INotificationService
 {
-    private static readonly TimeZoneInfo VnTz =
-        TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
-
     private readonly IServiceScopeFactory _scopeFactory;
 
     public NotificationService(IServiceScopeFactory scopeFactory)
         => _scopeFactory = scopeFactory;
 
-    private static DateTime VnNow() =>
-        TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, VnTz);
+    private static DateTime VnNow() => TimeZoneHelper.NowVn();
 
     // -------------------------------------------------------------------------
     // RunDailyReminderAsync — chạy mỗi ngày 09:00 AM (UTC+7)

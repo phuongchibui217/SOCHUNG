@@ -1,5 +1,6 @@
 using ExpenseManagerAPI.Data;
 using ExpenseManagerAPI.DTOs;
+using ExpenseManagerAPI.Helpers;
 using ExpenseManagerAPI.Models;
 using ExpenseManagerAPI.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -16,11 +17,13 @@ public class ExpensesController : ControllerBase
 {
     private readonly SoChungDbContext _db;
     private readonly ICategoryService _categoryService;
+    private readonly ILogger<ExpensesController> _logger;
 
-    public ExpensesController(SoChungDbContext db, ICategoryService categoryService)
+    public ExpensesController(SoChungDbContext db, ICategoryService categoryService, ILogger<ExpensesController> logger)
     {
         _db = db;
         _categoryService = categoryService;
+        _logger = logger;
     }
 
     // Lấy userId từ JWT claim "sub"
@@ -412,6 +415,7 @@ public class ExpensesController : ControllerBase
                     k => char.ToLower(k.Key[0]) + k.Key[1..],
                     v => v.Value!.Errors.Select(e => e.ErrorMessage).ToArray()
                 );
+            Console.WriteLine($"[CreateExpense] ModelState invalid: {System.Text.Json.JsonSerializer.Serialize(errors)}");
             return BadRequest(new { message = "Dữ liệu không hợp lệ", errors });
         }
 
@@ -421,8 +425,9 @@ public class ExpensesController : ControllerBase
         catch { return Unauthorized(new { message = "Phiên đăng nhập không hợp lệ." }); }
 
         // 3. Validate transactionDate
-        var transactionDate = request.TransactionDate?.Date ?? DateTime.Today;
-        if (transactionDate > DateTime.Today)
+        var todayVn = TimeZoneHelper.TodayVn();
+        var transactionDate = request.TransactionDate?.Date ?? todayVn;
+        if (transactionDate > todayVn)
         {
             return BadRequest(new
             {
@@ -437,7 +442,17 @@ public class ExpensesController : ControllerBase
         if (request.CategoryId.HasValue)
         {
             // categoryId được cung cấp — kiểm tra hợp lệ
-            var found = await _categoryService.GetValidCategoryAsync(request.CategoryId.Value, userId);
+            DanhMucChiTieu? found;
+            try
+            {
+                found = await _categoryService.GetValidCategoryAsync(request.CategoryId.Value, userId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[CreateExpense] GetValidCategoryAsync failed userId={UserId} categoryId={CategoryId}", userId, request.CategoryId.Value);
+                return StatusCode(500, new { message = "Lỗi khi kiểm tra danh mục", debug = ex.Message });
+            }
+
             if (found == null)
                 return BadRequest(new { message = "Danh mục không tồn tại hoặc không thuộc người dùng" });
 
@@ -446,7 +461,15 @@ public class ExpensesController : ControllerBase
         else
         {
             // categoryId null — fallback sang "Khác"
-            category = await _categoryService.GetOrCreateDefaultCategoryAsync(userId);
+            try
+            {
+                category = await _categoryService.GetOrCreateDefaultCategoryAsync(userId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[CreateExpense] GetOrCreateDefaultCategoryAsync failed userId={UserId}", userId);
+                return StatusCode(500, new { message = "Lỗi khi lấy danh mục mặc định", debug = ex.Message });
+            }
         }
 
         // 5. Insert ChiTieu
@@ -479,9 +502,10 @@ public class ExpensesController : ControllerBase
                 }
             });
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            return StatusCode(500, new { message = "Lưu giao dịch thất bại" });
+            Console.WriteLine($"[CreateExpense] ERROR userId={userId} categoryId={category.IdDanhMuc} amount={request.Amount}: {ex}");
+            return StatusCode(500, new { message = "Lưu giao dịch thất bại", debug = ex.Message });
         }
     }
 
@@ -547,8 +571,9 @@ public class ExpensesController : ControllerBase
             return NotFound(new { message = "Khoản chi không tồn tại" });
 
         // 2. Validate transactionDate
-        var transactionDate = request.TransactionDate?.Date ?? DateTime.Today;
-        if (transactionDate > DateTime.Today)
+        var todayVn = TimeZoneHelper.TodayVn();
+        var transactionDate = request.TransactionDate?.Date ?? todayVn;
+        if (transactionDate > todayVn)
             return BadRequest(new
             {
                 message = "Dữ liệu không hợp lệ",
@@ -596,8 +621,9 @@ public class ExpensesController : ControllerBase
                 }
             });
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "[UpdateExpense] ERROR id={Id} userId={UserId}", id, userId);
             return StatusCode(500, new { message = "Không thể cập nhật giao dịch. Vui lòng kiểm tra lại thông tin." });
         }
     }
@@ -620,8 +646,9 @@ public class ExpensesController : ControllerBase
             await _db.SaveChangesAsync();
             return Ok(new { message = "Xóa khoản chi thành công" });
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "[DeleteExpense] ERROR id={Id} userId={UserId}", id, userId);
             return StatusCode(500, new { message = "Xóa khoản chi thất bại" });
         }
     }

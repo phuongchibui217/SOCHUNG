@@ -16,11 +16,13 @@ public class CategoriesController : ControllerBase
 {
     private readonly SoChungDbContext _db;
     private readonly ICategoryService _categoryService;
+    private readonly ILogger<CategoriesController> _logger;
 
-    public CategoriesController(SoChungDbContext db, ICategoryService categoryService)
+    public CategoriesController(SoChungDbContext db, ICategoryService categoryService, ILogger<CategoriesController> logger)
     {
         _db = db;
         _categoryService = categoryService;
+        _logger = logger;
     }
 
     private long GetCurrentUserId() =>
@@ -103,8 +105,9 @@ public class CategoriesController : ControllerBase
                 }
             });
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "[CreateCategory] ERROR userId={UserId} name='{Name}'", userId, request.Name);
             return StatusCode(500, new { message = "Thêm mới danh mục thất bại" });
         }
     }

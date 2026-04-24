@@ -1,5 +1,6 @@
 using ExpenseManagerAPI.Data;
 using ExpenseManagerAPI.DTOs;
+using ExpenseManagerAPI.Helpers;
 using Microsoft.EntityFrameworkCore;
 
 namespace ExpenseManagerAPI.Services;
@@ -16,7 +17,7 @@ public class DashboardService : IDashboardService
     public (DateTime From, DateTime To, DateTime PrevFrom, DateTime PrevTo, string? Error)
         ResolveDateRange(OverviewQuery query)
     {
-        var today = DateTime.Today;
+        var today = TimeZoneHelper.TodayVn();
 
         switch (query.FilterType.ToLower())
         {

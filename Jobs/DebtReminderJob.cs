@@ -1,3 +1,4 @@
+using ExpenseManagerAPI.Helpers;
 using ExpenseManagerAPI.Services;
 
 namespace ExpenseManagerAPI.Jobs;
@@ -8,9 +9,6 @@ namespace ExpenseManagerAPI.Jobs;
 /// </summary>
 public class DebtReminderJob : BackgroundService
 {
-    private static readonly TimeZoneInfo VnTz =
-        TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
-
     private readonly INotificationService _notificationService;
     private readonly ILogger<DebtReminderJob> _logger;
 
@@ -44,8 +42,7 @@ public class DebtReminderJob : BackgroundService
 
             try
             {
-                _logger.LogInformation("DebtReminderJob: running at {Time}",
-                    TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, VnTz));
+                _logger.LogInformation("DebtReminderJob: running at {Time}", TimeZoneHelper.NowVn());
 
                 await _notificationService.RunDailyReminderAsync();
 
@@ -65,14 +62,14 @@ public class DebtReminderJob : BackgroundService
     /// </summary>
     private static TimeSpan CalculateDelayUntilNextRun()
     {
-        var nowVn = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, VnTz);
-        var nextRun = nowVn.Date.AddHours(9); // 09:00 AM hôm nay
+        var vnTz   = TimeZoneHelper.VnTimeZone;
+        var nowVn  = TimeZoneHelper.NowVn();
+        var nextRun = nowVn.Date.AddHours(9);
 
-        // Nếu đã qua 09:00 AM hôm nay thì lên lịch cho ngày mai
         if (nowVn >= nextRun)
             nextRun = nextRun.AddDays(1);
 
-        var nextRunUtc = TimeZoneInfo.ConvertTimeToUtc(nextRun, VnTz);
+        var nextRunUtc = TimeZoneInfo.ConvertTimeToUtc(nextRun, vnTz);
         return nextRunUtc - DateTime.UtcNow;
     }
 }

@@ -27,7 +27,7 @@ public class CongNoDetailDto : CongNoResponseDto
 public class CreateDebtRequest
 {
     // "NO" | "CHO_VAY" — flow này mặc định NO, vẫn nhận để tương thích CHO_VAY sau này
-    [RegularExpression("NO|CHO_VAY", ErrorMessage = "Loại công nợ không hợp lệ. Chấp nhận: NO, CHO_VAY")]
+    [RegularExpression("^(NO|CHO_VAY)$", ErrorMessage = "Loại công nợ không hợp lệ. Chấp nhận: NO, CHO_VAY")]
     public string TransactionType { get; set; } = "NO";
 
     [Required(ErrorMessage = "Vui lòng nhập Số tiền")]
@@ -176,7 +176,7 @@ public class DebtListQuery
 {
     // Bắt buộc: NO | CHO_VAY
     [Required(ErrorMessage = "transactionType là bắt buộc")]
-    [RegularExpression("NO|CHO_VAY", ErrorMessage = "transactionType không hợp lệ. Chấp nhận: NO, CHO_VAY")]
+    [RegularExpression("^(NO|CHO_VAY)$", ErrorMessage = "transactionType không hợp lệ. Chấp nhận: NO, CHO_VAY")]
     public string TransactionType { get; set; } = string.Empty;
 
     // Optional: ALL | OPEN | COMPLETED — mặc định ALL
@@ -243,7 +243,7 @@ public class UpdateDebtRequest
     [MaxLength(100, ErrorMessage = "Tên người không được vượt quá 100 ký tự")]
     public string PersonName { get; set; } = string.Empty;
 
-    [RegularExpression("NO|CHO_VAY", ErrorMessage = "Loại công nợ không hợp lệ. Chấp nhận: NO, CHO_VAY")]
+    [RegularExpression("^(NO|CHO_VAY)$", ErrorMessage = "Loại công nợ không hợp lệ. Chấp nhận: NO, CHO_VAY")]
     public string TransactionType { get; set; } = "NO";
 
     // Optional — null thì xóa hạn trả
